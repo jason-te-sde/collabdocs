@@ -12,7 +12,7 @@ CollabDocs has a web app, a collaboration server and rules that both must apply 
 - **npm workspaces,** not pnpm. The build machine has Node and npm and no pnpm or corepack, and the project needs nothing pnpm offers (a strict `node_modules`, a content store) badly enough to add a tool. One `package-lock.json` is committed and CI installs with `npm ci`.
 - **`shared` ships TypeScript source.** Its `exports` point at `src/index.ts`. Next.js transpiles it (`transpilePackages`), Vitest and `tsx` read it directly. There is no build step to forget and no stale `dist`. If the collab server is ever built to plain JavaScript, its bundler inlines `shared`.
 - **Sync is Yjs, carried on Socket.IO,** with the y-protocols sync and awareness messages, not `y-websocket`. The first goal names Socket.IO, and its Redis adapter lets several collab instances share a document's traffic without code of our own.
-- **Persistence is two tables.** `DocumentUpdate` is an append-only log; `DocumentSnapshot` holds the folded state. The collab server loads the newest snapshot and replays later updates, and compacts the log into a new snapshot from time to time. The tables exist in this release; the server that uses them is J-T2.
+- **Persistence is two tables.** `DocumentUpdate` is an append-only log; `DocumentSnapshot` holds the folded state. The collab server loads the newest snapshot and replays later updates, and compacts the log into a new snapshot from time to time. The server that uses them is described in [0003](0003-collab-server.md).
 - **The web app and the collab server share one database and one secret,** not an internal API. The collab server verifies a token locally with `COLLAB_TOKEN_SECRET`, so a sync event costs no HTTP round trip.
 
 ## Consequences

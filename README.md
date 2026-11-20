@@ -4,16 +4,17 @@ A real-time collaborative document editor: Yjs over Socket.IO, live cursors and 
 
 ## Status
 
-Version 0.1 is in progress, task by task. Done so far (J-T1):
+Version 0.1 is in progress, task by task. Done so far (J-T1 and J-T2):
 
-- an npm workspaces monorepo: `apps/web` (Next.js, App Router), `apps/collab` (empty until J-T2) and `packages/shared`;
+- an npm workspaces monorepo: `apps/web` (Next.js, App Router), `apps/collab` (the collab server) and `packages/shared`;
 - the PostgreSQL schema and migrations, with the ownership and membership rules enforced by the database;
 - sign-in with GitHub OAuth and with email and password (Auth.js);
 - the role model (`owner`, `editor`, `viewer`), `can(role, action)`, and the REST routes for documents and memberships, each checking the session and the role;
-- the signed, short-lived collaboration token that the socket server will require;
+- the signed, short-lived collaboration token that the socket server requires;
+- the collab server: Yjs sync and awareness over Socket.IO, a role check on every event, persistence (an update log compacted into snapshots), several instances behind Redis, and configurable limits;
 - CI.
 
-Not built yet: the collaboration server (J-T2), the editor UI (J-T3), the load tests (J-T4), the Lighthouse gate (J-T5). There is no editor to look at.
+Not built yet: the editor UI (J-T3), the load tests (J-T4), the Lighthouse gate (J-T5). There is no editor to look at.
 
 ## Goals
 
@@ -21,7 +22,7 @@ The project is built to deliver four things. They are goals, **not yet measured*
 
 1. Yjs CRDT sync over Socket.IO with a latency under 100 ms. Defined as: with 50 editors on loopback, the p95 of the time from one client's write to every other client applying it.
 2. 50 or more people editing one document at once, with live cursors and presence (the Yjs awareness protocol).
-3. Every route and every WebSocket event protected, with OAuth and password sign-in and role-based permissions. The REST half is done and tested; the socket half is J-T2.
+3. Every route and every WebSocket event protected, with OAuth and password sign-in and role-based permissions. Both halves are done and tested: the REST routes and the socket server.
 4. Lighthouse performance and accessibility of 92 or more, with Tailwind and Radix UI, enforced in CI.
 
 ## Layout
@@ -29,7 +30,7 @@ The project is built to deliver four things. They are goals, **not yet measured*
 | Path              | What it is                                                                    |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `apps/web`        | Next.js app: pages, Auth.js, the REST API, the Prisma schema and migrations   |
-| `apps/collab`     | The Socket.IO collaboration server (J-T2)                                     |
+| `apps/collab`     | The Socket.IO collaboration server                                            |
 | `packages/shared` | Role rules (`can`), the collaboration token signer and verifier, shared types |
 | `docs/design`     | Decision records                                                              |
 | `scripts`         | `preflight.sh` and the hygiene check                                          |
@@ -43,7 +44,7 @@ You need Node 22.12 or newer, PostgreSQL 15 or newer and Redis. On macOS with Ho
 ```sh
 brew install postgresql@17 redis      # skip what you have
 brew services start postgresql@17
-brew services start redis             # used by the collab server from J-T2
+brew services start redis             # the collab server and its tests
 
 createdb collabdocs
 createdb collabdocs_test              # the tests delete every row; the name must contain "test"
@@ -68,16 +69,43 @@ curl -X POST localhost:3000/api/register -H 'content-type: application/json' \
 
 Sign in at `http://localhost:3000/api/auth/signin`, then call the routes below with the session cookie.
 
+## Running the collab server
+
+```sh
+export DATABASE_URL=postgresql://you@localhost:5432/collabdocs
+export REDIS_URL=redis://localhost:6379          # optional: without it the server runs alone
+export COLLAB_TOKEN_SECRET=...                   # the same value the web app uses
+npm run start -w apps/collab                     # listens on :4000, GET /healthz
+```
+
+The web app asks for a token (`POST /api/documents/:id/collab-token`) and the client connects with `io("http://localhost:4000", { auth: { token, documentId } })`, then speaks the y-protocols sync and awareness messages in the `sync` and `awareness` events (see [0003](docs/design/0003-collab-server.md)). To run two instances behind Redis, start a second one with another `COLLAB_PORT`; they share documents through Redis and the database, and put a load balancer in front.
+
+Everything is configured by environment variables; the defaults are the ones in the table.
+
+| Variable                              | Default   | Meaning                                                        |
+| ------------------------------------- | --------- | -------------------------------------------------------------- |
+| `COLLAB_PORT`, `COLLAB_HOST`          | 4000, all | where it listens                                               |
+| `COLLAB_CORS_ORIGIN`                  | none      | allowed browser origins, comma separated                       |
+| `COLLAB_MAX_UPDATE_BYTES`             | 1048576   | largest sync or awareness message                              |
+| `COLLAB_MAX_MESSAGES_PER_SECOND`      | 100       | per socket; over it the socket is disconnected                 |
+| `COLLAB_MESSAGE_BURST`                | 200       | messages a socket may send at once                             |
+| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT` | 250       | across instances                                               |
+| `COLLAB_COMPACT_EVERY_UPDATES`        | 200       | compact the log into a snapshot after this many updates        |
+| `COLLAB_COMPACT_AFTER_MS`             | 30000     | or this long after the first uncompacted update                |
+| `COLLAB_UNLOAD_GRACE_MS`              | 30000     | keep a document in memory this long after its last client left |
+| `COLLAB_RECONCILE_INTERVAL_MS`        | 5000      | how often an instance reads the log for updates it did not see |
+| `COLLAB_MEMBERSHIP_RECHECK_MS`        | 60000     | how often sockets are checked against the `Membership` table   |
+
 ## Tests and checks
 
 ```sh
 export DATABASE_URL=postgresql://you@localhost:5432/collabdocs_test
 npm run db:deploy
-npm test                # unit and route tests; the route tests use PostgreSQL
+npm test                # unit, route and collab server tests; they use PostgreSQL and Redis
 npm run preflight       # everything CI runs
 ```
 
-`scripts/preflight.sh` creates `collabdocs_test` if it is missing and uses it when `DATABASE_URL` is unset. A test that cannot reach PostgreSQL fails; it does not skip. CI runs the same steps with PostgreSQL and Redis as service containers.
+`scripts/preflight.sh` creates `collabdocs_test` if it is missing and uses it when `DATABASE_URL` is unset; `REDIS_URL` defaults to `redis://localhost:6379`. Set `REDIS_URL` before `npm test`. A test that cannot reach PostgreSQL or Redis fails; it does not skip. The collab server tests start real servers in process on random ports and use their own Redis channel names. CI runs the same steps with PostgreSQL and Redis as service containers.
 
 ## API
 

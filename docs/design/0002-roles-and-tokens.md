@@ -41,7 +41,7 @@ The secret is `COLLAB_TOKEN_SECRET`: at least 32 bytes, and different from `AUTH
 ## Consequences
 
 - A change to the table in `shared` changes REST and sockets together, and the tests in `packages/shared` pin the table cell by cell.
-- A token is a snapshot of a role. It cannot be revoked, so a demoted or removed member keeps the old role for at most the token's life. The collab server must therefore re-check against the database, or drop connections on a membership change, which J-T2 does. Five minutes is the bound if it fails to.
+- A token is a snapshot of a role. It cannot be revoked, so a demoted or removed member keeps the old role for at most the token's life. The collab server must therefore re-check against the database, or drop connections on a membership change; the collab server does both ([0003](0003-collab-server.md)). Five minutes is the bound if it fails to.
 - A user asks for a new token by calling the endpoint again; clients refresh before expiry.
 - `can` knows roles, not documents. Ownership of a specific document is a database fact, loaded per request, which costs one query per route call.
 - Only registered users can be invited, since there are no pending invitations.
