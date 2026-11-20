@@ -1,6 +1,6 @@
 # 0001. One monorepo, npm workspaces, Socket.IO for sync
 
-Status: accepted.
+Status: accepted. Update: the Socket.IO Redis adapter this record counts on was later dropped, because the collab server needed it only for the room count and its requests could wait seconds during a Redis outage; the relay channel and the connection counter are the server's own ([0003](0003-collab-server.md)).
 
 ## Context
 

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed (review round)
+
+- **Collab server limits.** A per-socket byte budget, a cap on a document's stored size (writes are refused with `document_full`), a bounded queue of updates waiting for the database (the socket is closed with `overloaded`), and an 8 KiB cap on awareness messages.
+- **Redis.** The server refuses to start, after a timeout, when Redis is configured and unreachable; during an outage open sockets keep working and new handshakes fail at once. The connection limit is counted atomically in Redis (the Socket.IO adapter is gone). Relay and membership messages carry an HMAC made with `REDIS_MESSAGE_SECRET`, which is now required with `REDIS_URL`.
+- **Awareness** is bound to the user who announced it. **Roles** are read again when a socket attaches and, at most once per second, before a write; a periodic re-check that keeps failing closes the sockets.
+- **Compaction** is retried after a failure and runs at close; content edits update `Document.updatedAt`; a document deleted mid-request answers 404.
+- **Accounts.** Email verification with a pluggable mailer; invitations to an unverified address are held as pending and bind on verification; sign-in, registration and link requests are rate limited per client address and per account, with Redis counters and a per-process fallback.
+- **Tests** for the database triggers, index and CHECK constraints, and for guards that nothing covered: relay after commit, the advisory locks, `REPEATABLE READ`, the body cap, the timing equaliser. The web tests drive the real Auth.js handlers for credentials sign-in and the GitHub-linking refusal.
+
 ### Added
 
 - **Monorepo.** npm workspaces: `apps/web` (Next.js 16, App Router), `apps/collab` and `packages/shared`. TypeScript strict, ESLint 9, Prettier, Vitest; Playwright is installed for later tasks.

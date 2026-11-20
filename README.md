@@ -71,7 +71,7 @@ npm install
 cp apps/web/.env.example apps/web/.env
 ```
 
-Edit `apps/web/.env`: set `DATABASE_URL` (include your user name if PostgreSQL has no `postgres` role, for example `postgresql://you@localhost:5432/collabdocs`), and generate two different secrets with `openssl rand -base64 32` for `AUTH_SECRET` and `COLLAB_TOKEN_SECRET`. GitHub sign-in appears only when `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` are set; create an OAuth app with the callback URL `http://localhost:3000/api/auth/callback/github`. Password sign-in works without them.
+Edit `apps/web/.env`: set `DATABASE_URL` (include your user name if PostgreSQL has no `postgres` role, for example `postgresql://you@localhost:5432/collabdocs`), and generate two different secrets with `openssl rand -base64 32` for `AUTH_SECRET` and `COLLAB_TOKEN_SECRET`. GitHub sign-in appears only when `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` are set; create an OAuth app with the callback URL `http://localhost:3000/api/auth/callback/github`. Password sign-in works without them. In development the verification mail is printed in the terminal that runs the web app (`MAIL_TRANSPORT=console`, the default outside production); see [SECURITY.md](SECURITY.md) for plugging in a real mail provider.
 
 ```sh
 npm run db:deploy                     # apply the migrations
@@ -95,6 +95,7 @@ Sign in at `http://localhost:3000/api/auth/signin`, then call the routes below w
 export DATABASE_URL=postgresql://you@localhost:5432/collabdocs
 export REDIS_URL=redis://localhost:6379          # optional: without it the server runs alone
 export COLLAB_TOKEN_SECRET=...                   # the same value the web app uses
+export REDIS_MESSAGE_SECRET=...                  # required with REDIS_URL; the same value the web app uses
 npm run start -w apps/collab                     # listens on :4000, GET /healthz
 ```
 
@@ -102,19 +103,28 @@ The web app asks for a token (`POST /api/documents/:id/collab-token`) and the cl
 
 Everything is configured by environment variables; the defaults are the ones in the table.
 
-| Variable                              | Default   | Meaning                                                        |
-| ------------------------------------- | --------- | -------------------------------------------------------------- |
-| `COLLAB_PORT`, `COLLAB_HOST`          | 4000, all | where it listens                                               |
-| `COLLAB_CORS_ORIGIN`                  | none      | allowed browser origins, comma separated                       |
-| `COLLAB_MAX_UPDATE_BYTES`             | 1048576   | largest sync or awareness message                              |
-| `COLLAB_MAX_MESSAGES_PER_SECOND`      | 100       | per socket; over it the socket is disconnected                 |
-| `COLLAB_MESSAGE_BURST`                | 200       | messages a socket may send at once                             |
-| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT` | 250       | across instances                                               |
-| `COLLAB_COMPACT_EVERY_UPDATES`        | 200       | compact the log into a snapshot after this many updates        |
-| `COLLAB_COMPACT_AFTER_MS`             | 30000     | or this long after the first uncompacted update                |
-| `COLLAB_UNLOAD_GRACE_MS`              | 30000     | keep a document in memory this long after its last client left |
-| `COLLAB_RECONCILE_INTERVAL_MS`        | 5000      | how often an instance reads the log for updates it did not see |
-| `COLLAB_MEMBERSHIP_RECHECK_MS`        | 60000     | how often sockets are checked against the `Membership` table   |
+| Variable                              | Default   | Meaning                                                         |
+| ------------------------------------- | --------- | --------------------------------------------------------------- |
+| `COLLAB_PORT`, `COLLAB_HOST`          | 4000, all | where it listens                                                |
+| `COLLAB_CORS_ORIGIN`                  | none      | allowed browser origins, comma separated                        |
+| `COLLAB_MAX_UPDATE_BYTES`             | 1048576   | largest sync message                                            |
+| `COLLAB_MAX_AWARENESS_BYTES`          | 8192      | largest awareness message                                       |
+| `COLLAB_MAX_MESSAGES_PER_SECOND`      | 100       | per socket; over it the socket is disconnected                  |
+| `COLLAB_MESSAGE_BURST`                | 200       | messages a socket may send at once                              |
+| `COLLAB_MAX_BYTES_PER_SECOND`         | 262144    | per socket; over it the socket is disconnected                  |
+| `COLLAB_BYTE_BURST`                   | 2097152   | bytes a socket may send at once (at least the update maximum)   |
+| `COLLAB_MAX_DOCUMENT_BYTES`           | 16777216  | snapshot plus log; past it writes are refused                   |
+| `COLLAB_MAX_PENDING_BYTES`            | 8388608   | accepted but not yet stored, per document; past it, disconnect  |
+| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT` | 250       | across instances                                                |
+| `REDIS_MESSAGE_SECRET`                | none      | required with `REDIS_URL`; signs the Redis messages             |
+| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`     | 5000      | start fails if Redis is not reachable within this               |
+| `COLLAB_CONNECTION_TTL_MS`            | 45000     | a dead instance's connection slots expire after this            |
+| `COLLAB_COMPACT_EVERY_UPDATES`        | 200       | compact the log into a snapshot after this many updates         |
+| `COLLAB_COMPACT_AFTER_MS`             | 30000     | or this long after the first uncompacted update                 |
+| `COLLAB_UNLOAD_GRACE_MS`              | 30000     | keep a document in memory this long after its last client left  |
+| `COLLAB_RECONCILE_INTERVAL_MS`        | 5000      | how often an instance reads the log for updates it did not see  |
+| `COLLAB_MEMBERSHIP_RECHECK_MS`        | 60000     | how often sockets are checked against the `Membership` table    |
+| `COLLAB_ROLE_CACHE_MS`                | 1000      | a socket's role is read again before a write if older than this |
 
 ## Tests and checks
 
