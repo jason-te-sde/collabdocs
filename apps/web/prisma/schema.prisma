@@ -1,0 +1,128 @@
+// The invariants that Prisma cannot express (one owner per document, an owner
+// membership that matches Document.ownerId, immutable update rows, lower-case
+// emails) are in the migration SQL as a partial unique index, triggers and
+// check constraints. See docs/design/0002-roles-and-tokens.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  owner
+  editor
+  viewer
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  /// argon2id hash. Null for a user who only signs in with an OAuth provider.
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+
+  accounts      Account[]
+  sessions      Session[]
+  memberships   Membership[]
+  ownedDocuments Document[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner       User               @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  memberships Membership[]
+  snapshots   DocumentSnapshot[]
+  updates     DocumentUpdate[]
+
+  @@index([ownerId])
+}
+
+model Membership {
+  id         String   @id @default(cuid())
+  documentId String
+  userId     String
+  role       Role
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@index([userId])
+}
+
+model DocumentSnapshot {
+  id         String   @id @default(cuid())
+  documentId String
+  version    Int
+  /// Y.encodeStateAsUpdate of the whole document at this version.
+  state      Bytes
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, version])
+}
+
+/// Append-only: rows are inserted and, at compaction, deleted. Never updated.
+model DocumentUpdate {
+  id         BigInt   @id @default(autoincrement())
+  documentId String
+  seq        BigInt
+  data       Bytes
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, seq])
+}
