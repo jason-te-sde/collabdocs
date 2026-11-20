@@ -1,3 +1,12 @@
-// The collaboration server is built in J-T2. This package exists so that the
-// workspace layout, the shared dependency and the test runner are in place.
-export const COLLAB_SERVER_STATUS = "not implemented";
+export { startCollabServer, type CollabServer } from "./server";
+export {
+  DEFAULT_LIMITS,
+  DEFAULT_PERSISTENCE,
+  optionsFromEnv,
+  resolveOptions,
+  type CollabServerOptions,
+  type Limits,
+  type PersistenceOptions,
+} from "./config";
+export { DocumentStore } from "./store";
+export { consoleLogger, silentLogger, type Logger } from "./logger";
