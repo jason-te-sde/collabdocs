@@ -1,3 +1,5 @@
+import { addressKey } from "@collabdocs/shared";
+
 /** A token bucket: `burst` units at once, refilled at `perSecond`. A unit is a message or a byte. */
 export class RateLimiter {
   private tokens: number;
@@ -95,21 +97,5 @@ export function clientAddress(
     const found = entries[entries.length - hops];
     if (found) address = found;
   }
-  return groupIpv6(address);
-}
-
-function groupIpv6(address: string): string {
-  const bare = address.replace(/^::ffff:/i, "");
-  if (!bare.includes(":") || bare.includes(".")) return bare;
-  // Expand "::" and keep the first four groups: the /64 prefix.
-  const [head = "", tail = ""] = bare.split("::");
-  const front = head ? head.split(":") : [];
-  const back = tail ? tail.split(":") : [];
-  const fill = bare.includes("::")
-    ? Array(Math.max(0, 8 - front.length - back.length)).fill("0")
-    : [];
-  return [...front, ...fill, ...back]
-    .slice(0, 4)
-    .map((group) => group.toLowerCase().replace(/^0+(?=.)/, ""))
-    .join(":");
+  return addressKey(address);
 }

@@ -116,6 +116,30 @@ describe("clientIp", () => {
     expect(clientIp(headers("6.6.6.6, 203.0.113.9, 10.0.0.1"), env)).toBe("203.0.113.9");
   });
 
+  it("treats an empty or unset TRUSTED_PROXY_HOPS as the default of one, not as zero", () => {
+    expect(clientIp(headers("6.6.6.6, 203.0.113.9"), { TRUSTED_PROXY_HOPS: "" })).toBe(
+      "203.0.113.9",
+    );
+    expect(clientIp(headers("6.6.6.6, 203.0.113.9"), { TRUSTED_PROXY_HOPS: "  " })).toBe(
+      "203.0.113.9",
+    );
+    // A value that is not a whole number does not switch the limit off either.
+    expect(clientIp(headers("6.6.6.6, 203.0.113.9"), { TRUSTED_PROXY_HOPS: "lots" })).toBe(
+      "203.0.113.9",
+    );
+    expect(clientIp(headers("6.6.6.6, 203.0.113.9"), { TRUSTED_PROXY_HOPS: "-1" })).toBe(
+      "203.0.113.9",
+    );
+  });
+
+  it("counts every address of one IPv6 /64 as one client", () => {
+    const a = clientIp(headers("2001:db8:1:2::1"), {});
+    const b = clientIp(headers("2001:db8:1:2:dead:beef:0:7"), {});
+    expect(a).toBe("2001:db8:1:2");
+    expect(b).toBe(a);
+    expect(clientIp(headers("2001:db8:1:3::1"), {})).not.toBe(a);
+  });
+
   it("ignores the header with no trusted proxy, and without a header", () => {
     expect(clientIp(headers("203.0.113.9"), { TRUSTED_PROXY_HOPS: "0" })).toBe("unknown");
     expect(clientIp(headers(), {})).toBe("unknown");

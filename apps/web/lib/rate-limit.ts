@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { addressKey } from "@collabdocs/shared";
 import type { Redis } from "ioredis";
 import { HttpError } from "./api";
 import { getRedis } from "./redis";
@@ -139,27 +140,40 @@ export function authLimits() {
   };
 }
 
+let warnedHops = false;
+
+/** TRUSTED_PROXY_HOPS: unset or empty means 1; anything but a whole number of 0 or more is refused loudly and means 1. */
+function trustedHops(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return 1;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 0) return value;
+  if (!warnedHops) {
+    warnedHops = true;
+    console.error(`TRUSTED_PROXY_HOPS must be a whole number, 0 or more, got "${raw}"; using 1`);
+  }
+  return 1;
+}
+
 /**
  * The client's address as the proxy in front of the app saw it. `X-Forwarded-For`
  * is a list that each proxy appends to; the entries a client wrote itself come
  * first, so only the one added by the outermost trusted proxy can be believed:
  * TRUSTED_PROXY_HOPS (default 1) counts from the end. With 0 the header is
  * ignored, and every request shares the bucket "unknown": the per-account limit
- * is then the one that protects.
+ * is then the one that protects. An IPv6 address counts as its /64.
  */
 export function clientIp(
   headers: Headers,
   env: Record<string, string | undefined> = process.env,
 ): string {
-  const hops = Number.isInteger(Number(env.TRUSTED_PROXY_HOPS))
-    ? Number(env.TRUSTED_PROXY_HOPS)
-    : 1;
+  const hops = trustedHops(env.TRUSTED_PROXY_HOPS);
   if (hops <= 0) return "unknown";
   const forwarded = (headers.get("x-forwarded-for") ?? "")
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
-  return forwarded[forwarded.length - hops] ?? "unknown";
+  const address = forwarded[forwarded.length - hops];
+  return address ? addressKey(address) : "unknown";
 }
 
 /** Accounts are keyed by a hash of the address, so that no email is stored in Redis keys. */
