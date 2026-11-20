@@ -7,6 +7,7 @@ import {
   closeDb,
   connectErrorOf,
   createDocument,
+  holdAppends,
   launch,
   publishMembership,
   resetDb,
@@ -192,5 +193,30 @@ describe("two instances behind Redis", () => {
     await waitFor(async () => (await storedText(f.documentId)) === "before after", "the log");
     const late = await TestClient.connect(b, f, "viewer", "viewer");
     expect(late.text).toBe("before after");
+  });
+
+  it("relays an update to the other instance only after the append has committed", async () => {
+    const { a, b } = await pair();
+    const f = await createDocument();
+    const onA = await TestClient.connect(a, f, "owner", "owner");
+    const onB = await TestClient.connect(b, f, "viewer", "viewer");
+    const { release } = holdAppends(a);
+
+    onA.insert(0, "not yet durable");
+    // Instance A has applied it and told its own client's peers, but the log write is stuck.
+    await waitFor(
+      () => a.registry.get(f.documentId)?.doc.getText("text").toString() === "not yet durable",
+      "the update to reach instance A",
+    );
+    await settle(500);
+    expect(onB.text).toBe("");
+    expect(await updateRows(f.documentId)).toHaveLength(0);
+
+    release();
+    await waitFor(
+      () => onB.text === "not yet durable",
+      "the update to be relayed after the append",
+    );
+    expect(await updateRows(f.documentId)).toHaveLength(1);
   });
 });

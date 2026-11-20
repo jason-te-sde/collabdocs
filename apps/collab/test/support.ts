@@ -203,6 +203,20 @@ export function adapterKey(): string {
   return `test-io-${RUN}`;
 }
 
+/** Holds every log append of this server until `release` is called. */
+export function holdAppends(server: CollabServer): { release: () => void } {
+  const real = server.store.append.bind(server.store);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.store.append = async (documentId, updates) => {
+    await gate;
+    return real(documentId, updates);
+  };
+  return { release };
+}
+
 export function membershipChannel(): string {
   return `test-membership-${RUN}`;
 }

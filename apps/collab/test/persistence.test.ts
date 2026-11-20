@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CollabServer } from "../src/index";
+import type pg from "pg";
 import * as Y from "yjs";
 import {
   TestClient,
@@ -253,5 +254,110 @@ describe("the document's modification time", () => {
     a.insert(0, "edit");
     await waitForRows(f.documentId, 1);
     expect(await modified()).toBeGreaterThan(before);
+  });
+});
+
+const afterEachRelease: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const release of afterEachRelease.splice(0)) await release();
+});
+
+/** Holds the per-document advisory lock that the store takes, from a connection of its own. */
+async function holdDocumentLock(documentId: string): Promise<() => Promise<void>> {
+  const client = await db().connect();
+  await client.query("BEGIN");
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [documentId]);
+  let released = false;
+  afterEachRelease.push(async () => {
+    if (!released) {
+      released = true;
+      await client.query("COMMIT").catch(() => {});
+      client.release();
+    }
+  });
+  return async () => {
+    if (released) return;
+    released = true;
+    await client.query("COMMIT");
+    client.release();
+  };
+}
+
+function track<T>(promise: Promise<T>): { done: () => boolean; result: Promise<T> } {
+  let finished = false;
+  return {
+    done: () => finished,
+    result: promise.finally(() => {
+      finished = true;
+    }),
+  };
+}
+
+describe("the store's per-document advisory lock", () => {
+  it("makes compaction wait for whoever holds the document's lock", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    await server.store.append(f.documentId, [Y.encodeStateAsUpdate(new Y.Doc())]);
+    const release = await holdDocumentLock(f.documentId);
+    const compaction = track(server.store.compact(f.documentId));
+    await settle(400);
+    expect(compaction.done()).toBe(false);
+    await release();
+    expect(await compaction.result).toMatchObject({ folded: 1 });
+  });
+
+  it("makes an append wait for whoever holds the document's lock", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    const release = await holdDocumentLock(f.documentId);
+    const append = track(server.store.append(f.documentId, [Y.encodeStateAsUpdate(new Y.Doc())]));
+    await settle(400);
+    expect(append.done()).toBe(false);
+    await release();
+    expect(await append.result).toBe(1);
+  });
+});
+
+describe("reading a document", () => {
+  it("sees one consistent state even when a compaction commits between its two queries", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    const source = new Y.Doc();
+    const write = async (text: string) => {
+      let captured: Uint8Array | null = null;
+      source.once("update", (update: Uint8Array) => (captured = update));
+      source.getText("text").insert(source.getText("text").length, text);
+      await server.store.append(f.documentId, [captured!]);
+    };
+    await write("one ");
+    await write("two ");
+    await server.store.compact(f.documentId);
+    await write("three ");
+    await write("four");
+
+    // Between the reader's snapshot query and its log query, another connection compacts:
+    // the log rows the reader is about to ask for are folded into a newer snapshot and deleted.
+    const pool = (server.store as unknown as { pool: pg.Pool }).pool;
+    const connect = pool.connect.bind(pool) as () => Promise<pg.PoolClient>;
+    let armed = true;
+    (pool as unknown as { connect: () => Promise<pg.PoolClient> }).connect = async () => {
+      const client = await connect();
+      const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+      (client as unknown as { query: typeof query }).query = async (...args: unknown[]) => {
+        if (armed && typeof args[0] === "string" && args[0].includes('FROM "DocumentUpdate"')) {
+          armed = false;
+          await server.store.compact(f.documentId);
+        }
+        return query(...args);
+      };
+      return client;
+    };
+
+    const stored = await server.store.read(f.documentId, -1);
+    expect(armed).toBe(false);
+    const doc = new Y.Doc();
+    if (stored.snapshot) Y.applyUpdate(doc, stored.snapshot);
+    for (const row of stored.updates) Y.applyUpdate(doc, row.data);
+    expect(doc.getText("text").toString()).toBe("one two three four");
   });
 });

@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { CollabServer } from "../src/index";
 import { RateLimiter } from "../src/limits";
 import {
   TestClient,
@@ -8,6 +7,7 @@ import {
   closeDb,
   connectErrorOf,
   createDocument,
+  holdAppends,
   launch,
   redisClient,
   resetDb,
@@ -118,20 +118,6 @@ describe("limits", () => {
     expect(viewer.connected).toBe(true);
   });
 });
-
-/** Holds every log append of this server until `release` is called. */
-function holdAppends(server: CollabServer): { release: () => void } {
-  const real = server.store.append.bind(server.store);
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  server.store.append = async (documentId, updates) => {
-    await gate;
-    return real(documentId, updates);
-  };
-  return { release };
-}
 
 describe("one editor cannot exhaust the server", () => {
   it("disconnects a socket that sends more bytes than its budget, however few messages", async () => {

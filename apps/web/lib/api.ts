@@ -53,6 +53,31 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
 
 const MAX_BODY_BYTES = 16 * 1024;
 
+/**
+ * Reads the body as text, refusing with 413 once it passes `limit` bytes. It stops
+ * reading at the limit instead of buffering a body of any size and measuring it after.
+ */
+async function readCapped(request: Request, limit: number): Promise<string> {
+  const tooLarge = () => new HttpError(413, "payload_too_large", "The body is too large");
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) throw tooLarge();
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 /** Reads and validates a JSON body. Requires the JSON content type, which a cross-site form cannot send. */
 export async function readBody<T extends z.ZodType>(
   request: Request,
@@ -62,10 +87,7 @@ export async function readBody<T extends z.ZodType>(
   if (!type.toLowerCase().startsWith("application/json")) {
     throw new HttpError(415, "unsupported_media_type", "Send the body as application/json");
   }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) {
-    throw new HttpError(413, "payload_too_large", "The body is too large");
-  }
+  const text = await readCapped(request, MAX_BODY_BYTES);
   let raw: unknown;
   try {
     raw = JSON.parse(text);
