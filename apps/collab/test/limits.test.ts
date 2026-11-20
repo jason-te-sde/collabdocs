@@ -56,6 +56,40 @@ describe("KeyedRateLimiter", () => {
   });
 });
 
+describe("KeyedRateLimiter under a flood of keys", () => {
+  it("evicts the least recently used key, so a client that keeps sending keeps its bucket", () => {
+    const now = 0;
+    const limiter = new KeyedRateLimiter(0.001, 2, () => now, 4);
+    // "live" has spent its burst; it keeps asking, so it stays recent.
+    expect(limiter.allow("live", 2)).toBe(true);
+    for (let i = 0; i < 50; i += 1) {
+      limiter.allow(`flood-${i}`, 2);
+      expect(limiter.allow("live")).toBe(false);
+    }
+    expect(limiter.size).toBeLessThanOrEqual(4);
+  });
+
+  it("counts evictions of buckets that were not full, and not of the ones that were", () => {
+    let now = 0;
+    const limiter = new KeyedRateLimiter(1, 2, () => now, 2);
+    limiter.allow("a", 2);
+    limiter.allow("b", 2);
+    limiter.allow("c", 2); // a goes, with a deficit
+    expect(limiter.evictions).toBe(1);
+    now += 10_000; // everything has refilled
+    limiter.allow("d");
+    limiter.allow("e");
+    expect(limiter.evictions).toBe(1);
+  });
+
+  it("holds memory at the cap however many keys arrive", () => {
+    const limiter = new KeyedRateLimiter(1, 1, () => 0, 1000);
+    for (let i = 0; i < 20_000; i += 1) limiter.allow(`k${i}`);
+    expect(limiter.size).toBe(1000);
+    expect(limiter.evictions).toBe(19_000);
+  });
+});
+
 describe("clientAddress", () => {
   it("believes X-Forwarded-For only behind trusted proxies, counting from the end", () => {
     expect(clientAddress("10.0.0.9", "1.1.1.1, 2.2.2.2", 0)).toBe("10.0.0.9");

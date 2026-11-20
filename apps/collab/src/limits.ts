@@ -37,29 +37,42 @@ export function payloadBytes(payload: unknown): number {
   return 0;
 }
 
+/** How many of the least recently used buckets are looked at for one that is full again. */
+const EVICTION_SCAN = 8;
+
 /**
- * One token bucket per key (a user, a client address), created on first use. The map
- * is bounded: past `maxKeys`, buckets that are full again are forgotten (which loses
- * nothing), and if that is not enough the oldest go, so a flood of distinct keys
- * cannot grow memory without bound.
+ * One token bucket per key (a user, a client address), created on first use. Memory is
+ * bounded by `maxKeys`, high enough that honest traffic never reaches it. Past it the
+ * least recently used bucket is forgotten, and a bucket forgotten comes back full, so
+ * forgetting is a (small) gift to whoever it belonged to. Three things keep that from
+ * being a cheap way to reset a limit: only the least recently used key goes (a client
+ * that keeps sending is never the one), a key that is full again anyway is preferred,
+ * and every eviction of a bucket that was not full is counted in `evictions`, which the
+ * server reports as a metric: a rising count means a flood of distinct keys, or a
+ * `maxKeys` that is too low for the traffic. The buckets live in this process: with n
+ * instances a key has n buckets.
  */
 export class KeyedRateLimiter {
+  /** Insertion order is recency order: a used key is moved to the end. */
   private readonly buckets = new Map<string, RateLimiter>();
+  private evicted = 0;
 
   constructor(
     private readonly perSecond: number,
     private readonly burst: number,
     private readonly now: () => number = Date.now,
-    private readonly maxKeys = 10_000,
+    private readonly maxKeys = 100_000,
   ) {}
 
   allow(key: string, cost = 1): boolean {
     let bucket = this.buckets.get(key);
-    if (!bucket) {
-      if (this.buckets.size >= this.maxKeys) this.prune();
+    if (bucket) {
+      this.buckets.delete(key);
+    } else {
+      while (this.buckets.size >= this.maxKeys) this.evictOne();
       bucket = new RateLimiter(this.perSecond, this.burst, this.now);
-      this.buckets.set(key, bucket);
     }
+    this.buckets.set(key, bucket);
     return bucket.allow(cost);
   }
 
@@ -67,12 +80,26 @@ export class KeyedRateLimiter {
     return this.buckets.size;
   }
 
-  private prune(): void {
-    for (const [key, bucket] of this.buckets) if (bucket.isFull()) this.buckets.delete(key);
-    for (const key of this.buckets.keys()) {
-      if (this.buckets.size < this.maxKeys) break;
-      this.buckets.delete(key);
+  /** Buckets dropped while they still held a deficit, since the start. */
+  get evictions(): number {
+    return this.evicted;
+  }
+
+  /** Drops a bucket from the cold end: a full one among the first few if there is one, else the oldest. */
+  private evictOne(): void {
+    let scanned = 0;
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.isFull()) {
+        this.buckets.delete(key);
+        return;
+      }
+      scanned += 1;
+      if (scanned >= EVICTION_SCAN) break;
     }
+    const oldest = this.buckets.keys().next();
+    if (oldest.done) return;
+    this.buckets.delete(oldest.value);
+    this.evicted += 1;
   }
 }
 

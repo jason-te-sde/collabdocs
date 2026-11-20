@@ -31,6 +31,8 @@ export interface CollabServer {
   readonly instanceId: string;
   readonly registry: DocumentRegistry;
   readonly store: DocumentStore;
+  /** Counters that an operator watches; also served as text at /metrics. */
+  metrics(): { rateLimiterEvictions: Record<string, number> };
   /** Stops accepting connections, writes what is queued and releases every resource. */
   close(): Promise<void>;
 }
@@ -86,6 +88,21 @@ export async function startCollabServer(
 
   const store = new DocumentStore(options.databaseUrl);
   const httpServer = createServer((request, response) => {
+    if (request.url === "/metrics") {
+      const lines = Object.entries(rateLimiterEvictions()).map(
+        ([name, count]) => `collabdocs_rate_limiter_evictions_total{limiter="${name}"} ${count}`,
+      );
+      response.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
+      response.end(
+        [
+          "# HELP collabdocs_rate_limiter_evictions_total Buckets dropped before they refilled, because the limiter was full of distinct keys.",
+          "# TYPE collabdocs_rate_limiter_evictions_total counter",
+          ...lines,
+          "",
+        ].join("\n"),
+      );
+      return;
+    }
     if (request.url === "/healthz") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end('{"ok":true}');
@@ -101,6 +118,7 @@ export async function startCollabServer(
   });
 
   const cleanups: Array<() => Promise<void>> = [];
+  let rateLimiterEvictions = (): Record<string, number> => ({});
   let relay = (
     _documentId: string,
     _kind: RelayKind,
@@ -213,18 +231,31 @@ export async function startCollabServer(
   });
 
   // Limits that hold for a user or an address however many sockets they open. Per instance.
+  const maxKeys = options.rateLimiterMaxKeys;
   const handshakesByIp = new KeyedRateLimiter(
     limits.handshakesPerSecondPerIp,
     limits.handshakeBurstPerIp,
+    Date.now,
+    maxKeys,
   );
   const handshakesByUser = new KeyedRateLimiter(
     limits.handshakesPerSecondPerUser,
     limits.handshakeBurstPerUser,
+    Date.now,
+    maxKeys,
   );
   const bytesByUser = new KeyedRateLimiter(
     limits.maxBytesPerSecondPerUser,
     limits.byteBurstPerUser,
+    Date.now,
+    maxKeys,
   );
+  rateLimiterEvictions = () => ({
+    handshakes_by_address: handshakesByIp.evictions,
+    handshakes_by_user: handshakesByUser.evictions,
+    bytes_by_user: bytesByUser.evictions,
+  });
+  let warnedForwarded = false;
   /** Payload bytes received and not yet processed, over every socket of this instance. */
   let inFlightBytes = 0;
 
@@ -244,13 +275,17 @@ export async function startCollabServer(
       if (slot) void counter.leave(slot.documentId, socket.id, slot.userId);
     });
     try {
-      const address = clientAddress(
-        socket.handshake.address,
-        socket.handshake.headers["x-forwarded-for"],
-        options.trustedProxyHops,
-      );
-      if (!handshakesByIp.allow(address)) {
-        return refuse("rate_limited", "too many handshakes from this address", { address });
+      if (
+        !options.trustedProxyHopsConfigured &&
+        options.trustedProxyHops === 0 &&
+        !warnedForwarded &&
+        socket.handshake.headers["x-forwarded-for"] !== undefined
+      ) {
+        warnedForwarded = true;
+        logger.warn(
+          "a handshake carries X-Forwarded-For but COLLAB_TRUSTED_PROXY_HOPS is not set: every client behind the proxy is counted as the proxy's address. Set it to the number of proxies in front of this server.",
+          { instance: instanceId },
+        );
       }
       const auth: unknown = socket.handshake.auth;
       const { token, documentId } = (typeof auth === "object" && auth !== null ? auth : {}) as {
@@ -271,6 +306,20 @@ export async function startCollabServer(
       } catch (error) {
         const why = error instanceof Error ? error.message : "invalid";
         return refuse("invalid_token", why, { documentId });
+      }
+      // Only a handshake with a valid token counts against an address, and the ceiling is
+      // high: garbage from one client, or one busy address, cannot use up the budget that
+      // other users behind the same proxy need. The per-user limit is the tight one.
+      const address = clientAddress(
+        socket.handshake.address,
+        socket.handshake.headers["x-forwarded-for"],
+        options.trustedProxyHops,
+      );
+      if (!handshakesByIp.allow(address)) {
+        return refuse("rate_limited", "too many handshakes from this address", {
+          address,
+          documentId,
+        });
       }
       if (!handshakesByUser.allow(claims.userId)) {
         return refuse("rate_limited", "too many handshakes from this user", {
@@ -416,5 +465,14 @@ export async function startCollabServer(
     return closing;
   };
 
-  return { io, httpServer, port, instanceId, registry, store, close };
+  return {
+    io,
+    httpServer,
+    port,
+    instanceId,
+    registry,
+    store,
+    metrics: () => ({ rateLimiterEvictions: rateLimiterEvictions() }),
+    close,
+  };
 }

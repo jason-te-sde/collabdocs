@@ -265,3 +265,113 @@ describe("limits that are per user, not per socket", () => {
     expect(server.logs.find("too many payload bytes in flight; disconnecting")).toHaveLength(1);
   });
 });
+
+/** One handshake with a header and an auth payload of the test's choosing; the outcome is the error code or "connected". */
+async function handshake(
+  server: Awaited<ReturnType<typeof launch>>,
+  auth: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Promise<string> {
+  const { io: connect } = await import("socket.io-client");
+  const socket = connect(`http://127.0.0.1:${server.port}`, {
+    auth,
+    transports: ["websocket"],
+    reconnection: false,
+    forceNew: true,
+    extraHeaders: headers,
+  });
+  const outcome = await new Promise<string>((resolve) => {
+    socket.on("connect", () => resolve("connected"));
+    socket.on("connect_error", (error: Error & { data?: { code?: string } }) =>
+      resolve(error.data?.code ?? error.message),
+    );
+  });
+  socket.close();
+  return outcome;
+}
+
+describe("one anonymous client cannot lock out the others behind the same address", () => {
+  it("does not count a handshake without a valid token against the address", async () => {
+    // A proxy that is not configured: every client has the proxy's address. The address
+    // ceiling is set low here to make the point with a few handshakes.
+    const server = await launch({
+      limits: { handshakeBurstPerIp: 3, handshakesPerSecondPerIp: 0.01 },
+    });
+    const f = await createDocument();
+    for (let i = 0; i < 12; i += 1) {
+      expect(await handshake(server, { token: "garbage", documentId: f.documentId })).toBe(
+        "invalid_token",
+      );
+    }
+    expect(await handshake(server, {})).toBe("invalid_token");
+    // A real user still gets in.
+    const { mintToken } = await import("./support");
+    const token = await mintToken(f.documentId, f.users.owner!, "owner");
+    expect(await handshake(server, { token, documentId: f.documentId })).toBe("connected");
+  });
+
+  it("still holds the address ceiling for handshakes with valid tokens", async () => {
+    const server = await launch({
+      limits: { handshakeBurstPerIp: 2, handshakesPerSecondPerIp: 0.01 },
+    });
+    const f = await createDocument();
+    const { mintToken } = await import("./support");
+    const outcomes: string[] = [];
+    for (const who of ["owner", "editor", "viewer"] as const) {
+      const token = await mintToken(f.documentId, f.users[who]!, who);
+      outcomes.push(await handshake(server, { token, documentId: f.documentId }));
+    }
+    expect(outcomes).toEqual(["connected", "connected", "rate_limited"]);
+  });
+
+  it("has an address ceiling by default that a whole office behind one address does not reach", async () => {
+    const { DEFAULT_LIMITS } = await import("../src/config");
+    expect(DEFAULT_LIMITS.handshakeBurstPerIp).toBeGreaterThanOrEqual(1000);
+    expect(DEFAULT_LIMITS.handshakeBurstPerIp).toBeGreaterThan(
+      DEFAULT_LIMITS.handshakeBurstPerUser * 50,
+    );
+  });
+});
+
+describe("the proxy warning", () => {
+  const forwarded = { "x-forwarded-for": "203.0.113.9" };
+  const warnings = (server: Awaited<ReturnType<typeof launch>>) =>
+    server.logs.records.filter((r) => r.level === "warn" && r.message.includes("X-Forwarded-For"));
+
+  it("warns once when requests carry X-Forwarded-For and the hop count was never set", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    await handshake(server, { token: "x", documentId: f.documentId });
+    expect(warnings(server)).toHaveLength(0);
+    await handshake(server, { token: "x", documentId: f.documentId }, forwarded);
+    await handshake(server, { token: "x", documentId: f.documentId }, forwarded);
+    expect(warnings(server)).toHaveLength(1);
+    expect(String(warnings(server)[0]!.message)).toContain("COLLAB_TRUSTED_PROXY_HOPS");
+  });
+
+  it("is silent when the operator set the count, even to 0", async () => {
+    const f = await createDocument();
+    for (const hops of [0, 1]) {
+      const server = await launch({ trustedProxyHops: hops });
+      await handshake(server, { token: "x", documentId: f.documentId }, forwarded);
+      expect(warnings(server)).toHaveLength(0);
+    }
+  });
+});
+
+describe("the rate limiter metric", () => {
+  it("counts evictions and serves them at /metrics", async () => {
+    const server = await launch({ rateLimiterMaxKeys: 2 });
+    const f = await createDocument();
+    const { mintToken } = await import("./support");
+    for (const who of ["owner", "editor", "viewer"] as const) {
+      const token = await mintToken(f.documentId, f.users[who]!, who);
+      expect(await handshake(server, { token, documentId: f.documentId })).toBe("connected");
+    }
+    expect(server.metrics().rateLimiterEvictions.handshakes_by_user).toBe(1);
+    const text = await (await fetch(`http://127.0.0.1:${server.port}/metrics`)).text();
+    expect(text).toContain(
+      'collabdocs_rate_limiter_evictions_total{limiter="handshakes_by_user"} 1',
+    );
+  });
+});

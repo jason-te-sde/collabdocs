@@ -20,7 +20,12 @@ export interface Limits {
   /** Handshakes one user may start in a burst, per instance; then `handshakesPerSecondPerUser` applies. */
   handshakeBurstPerUser: number;
   handshakesPerSecondPerUser: number;
-  /** The same per client address, per instance. */
+  /**
+   * An anti-flood ceiling per client address, per instance, counted only for handshakes
+   * with a valid token. It is far above what a person or a user's devices need: an
+   * address is shared by everyone behind a proxy or a NAT, so a tight value would let
+   * one client lock out the rest. The limit that matters is the one per user.
+   */
   handshakeBurstPerIp: number;
   handshakesPerSecondPerIp: number;
   /** Payload bytes per second all sockets of one user share, per instance. */
@@ -80,6 +85,10 @@ export interface CollabServerOptions {
    * default) uses the socket's own address and ignores the header.
    */
   trustedProxyHops: number;
+  /** Whether the hop count was set by the operator (also true for an explicit 0). */
+  trustedProxyHopsConfigured: boolean;
+  /** Most distinct keys one rate limiter keeps buckets for; past it the least recently used go. */
+  rateLimiterMaxKeys: number;
   /** Allowed browser origin for the socket handshake; unset allows none (same-origin only). */
   corsOrigin?: string | string[];
   limits: Limits;
@@ -97,8 +106,8 @@ export const DEFAULT_LIMITS: Limits = {
   maxConnectionsPerUser: 8,
   handshakeBurstPerUser: 20,
   handshakesPerSecondPerUser: 1,
-  handshakeBurstPerIp: 100,
-  handshakesPerSecondPerIp: 5,
+  handshakeBurstPerIp: 2000,
+  handshakesPerSecondPerIp: 100,
   maxBytesPerSecondPerUser: 512 * 1024,
   byteBurstPerUser: 4 * 1024 * 1024,
   maxInFlightBytes: 64 * 1024 * 1024,
@@ -119,7 +128,9 @@ export const DEFAULT_PERSISTENCE: PersistenceOptions = {
   roleCacheMs: 1_000,
 };
 
-type OptionOverrides = Partial<Omit<CollabServerOptions, "limits" | "persistence">> & {
+type OptionOverrides = Partial<
+  Omit<CollabServerOptions, "limits" | "persistence" | "trustedProxyHopsConfigured">
+> & {
   databaseUrl: string;
   tokenSecret: string;
   limits?: Partial<Limits>;
@@ -135,8 +146,10 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
     connectionTtlMs: 45_000,
     membershipChannel: "collabdocs:membership",
     trustedProxyHops: 0,
+    rateLimiterMaxKeys: 100_000,
     logger: consoleLogger,
     ...input,
+    trustedProxyHopsConfigured: input.trustedProxyHops !== undefined,
     limits: { ...DEFAULT_LIMITS, ...input.limits },
     persistence: { ...DEFAULT_PERSISTENCE, ...input.persistence },
   };
@@ -156,6 +169,7 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
   for (const [name, value] of [
     ["redisConnectTimeoutMs", options.redisConnectTimeoutMs] as const,
     ["connectionTtlMs", options.connectionTtlMs] as const,
+    ["rateLimiterMaxKeys", options.rateLimiterMaxKeys] as const,
     ...Object.entries(options.limits),
     ...Object.entries(options.persistence),
   ]) {
@@ -207,6 +221,7 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
       redisConnectTimeoutMs: number(env, "COLLAB_REDIS_CONNECT_TIMEOUT_MS"),
       connectionTtlMs: number(env, "COLLAB_CONNECTION_TTL_MS"),
       trustedProxyHops: number(env, "COLLAB_TRUSTED_PROXY_HOPS"),
+      rateLimiterMaxKeys: number(env, "COLLAB_RATE_LIMITER_MAX_KEYS"),
     }),
     limits: defined({
       maxUpdateBytes: number(env, "COLLAB_MAX_UPDATE_BYTES"),
