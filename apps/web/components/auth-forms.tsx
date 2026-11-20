@@ -107,7 +107,9 @@ export function RegisterForm() {
     // The account exists: sign in with the same credentials. On success the action redirects.
     const result = await signInAction(initial, form);
     if (result.error) {
-      setError("Your account was created, but signing in failed. Try the sign-in page.");
+      setError(
+        "We could not sign you in. If you already have an account, use the sign-in page; if not, check your email.",
+      );
       setPending(false);
     }
   }

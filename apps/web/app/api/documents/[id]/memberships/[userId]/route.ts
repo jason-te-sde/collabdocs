@@ -23,6 +23,11 @@ async function targetMembership(documentId: string, userId: string) {
   return target;
 }
 
+/** The pending invitations a member sent on a document: they end with the member's right to share. */
+async function dropInvitationsFrom(documentId: string, userId: string): Promise<void> {
+  await getDb().pendingInvite.deleteMany({ where: { documentId, invitedById: userId } });
+}
+
 /** Change a member's role. Needs "change-role"; the owner's role cannot change. */
 export const PATCH = handle(async (request: Request, { params }: MemberContext) => {
   const { id, userId } = await params;
@@ -37,6 +42,8 @@ export const PATCH = handle(async (request: Request, { params }: MemberContext) 
     where: { documentId_userId: { documentId: id, userId } },
     data: { role },
   });
+  // A member who can no longer share must not leave invitations behind.
+  if (!can(role, "share")) await dropInvitationsFrom(id, userId);
   await publishMembershipChange({ documentId: id, userId, change: "role-changed" });
   return json({ membership: { userId, role: updated.role } });
 });
@@ -62,6 +69,7 @@ export const DELETE = handle(async (_request: Request, { params }: MemberContext
     );
   }
   await getDb().membership.delete({ where: { documentId_userId: { documentId: id, userId } } });
+  await dropInvitationsFrom(id, userId);
   await publishMembershipChange({ documentId: id, userId, change: "removed" });
   return noContent();
 });

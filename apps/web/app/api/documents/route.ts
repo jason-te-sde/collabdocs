@@ -1,12 +1,15 @@
 import { z } from "zod";
 import { handle, json, readBody, requireUser } from "@/lib/api";
 import { getDb } from "@/lib/db";
+import { bindInvitesFor } from "@/lib/verification";
 
 const createSchema = z.object({ title: z.string().trim().min(1).max(200) });
 
 /** Documents the caller is a member of, newest change first. */
 export const GET = handle(async () => {
   const user = await requireUser();
+  // Invitations to this address, if it is verified, become documents now.
+  await bindInvitesFor(user.id);
   const memberships = await getDb().membership.findMany({
     where: { userId: user.id },
     include: { document: true },

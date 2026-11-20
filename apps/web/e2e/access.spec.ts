@@ -88,9 +88,10 @@ test("sign up, create, rename and share a document through the pages", async ({ 
   await owner.page.getByRole("button", { name: "Share" }).click();
   await owner.page.getByLabel("Email").fill(guest.email);
   await owner.page.getByRole("button", { name: "Invite" }).click();
-  await expect(owner.page.getByRole("list", { name: "People with access" })).toContainText(
-    guest.email,
-  );
+  await expect(owner.page.getByText(`Invitation sent to ${guest.email}`)).toBeVisible();
+  await expect(
+    owner.page.getByRole("list", { name: "Pending invitations" }).getByText(guest.email),
+  ).toBeVisible();
   await owner.page.keyboard.press("Escape");
 
   await owner.page.goto("/documents");
@@ -142,7 +143,7 @@ test("an invitation to an unconfirmed address waits until the address is confirm
   await owner.page.getByRole("button", { name: "Share" }).click();
   await owner.page.getByLabel("Email").fill(guest.email);
   await owner.page.getByRole("button", { name: "Invite" }).click();
-  await expect(owner.page.getByText("has not confirmed their email address yet")).toBeVisible();
+  await expect(owner.page.getByText(`Invitation sent to ${guest.email}`)).toBeVisible();
   await expect(
     owner.page.getByRole("list", { name: "Pending invitations" }).getByText(guest.email),
   ).toBeVisible();

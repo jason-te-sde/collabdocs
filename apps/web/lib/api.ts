@@ -2,6 +2,7 @@ import { can, type Action, type Role } from "@collabdocs/shared";
 import type { z } from "zod";
 import { auth } from "@/auth";
 import { getDb } from "./db";
+import { bindInvitesFor } from "./verification";
 
 export class HttpError extends Error {
   constructor(
@@ -143,10 +144,13 @@ export async function requireRole(
   userId: string,
   action: Action,
 ): Promise<Role> {
-  const membership = await getDb().membership.findUnique({
-    where: { documentId_userId: { documentId, userId } },
-    select: { role: true },
-  });
+  const find = () =>
+    getDb().membership.findUnique({
+      where: { documentId_userId: { documentId, userId } },
+      select: { role: true },
+    });
+  let membership = await find();
+  if (!membership && (await bindInvitesFor(userId, documentId)) > 0) membership = await find();
   if (!membership) throw new HttpError(404, "not_found", "Document not found");
   if (!can(membership.role, action)) {
     throw new HttpError(403, "forbidden", `Your role does not allow this (${action})`);

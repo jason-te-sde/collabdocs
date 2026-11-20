@@ -102,11 +102,9 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
     event.preventDefault();
     void run(async () => {
       const result = await inviteMember(documentId, email, inviteRole);
-      if (result.invitation) {
-        setNotice(
-          `${result.invitation.email} has not confirmed their email address yet. They get access when they do.`,
-        );
-      }
+      setNotice(
+        `Invitation sent to ${result.invitation.email}. They get access once they have an account with a confirmed address and open CollabDocs.`,
+      );
       setEmail("");
     });
   }
@@ -135,7 +133,7 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
           <Dialog.Title className="text-lg font-semibold">Share this document</Dialog.Title>
           <Dialog.Description className="mt-1 text-sm text-slate-700">
             {canShare
-              ? "Invite people who already have an account, by email."
+              ? "Invite people by email. An invitation waits until the address belongs to a confirmed account."
               : "These people can open this document."}
           </Dialog.Description>
 

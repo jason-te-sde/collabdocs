@@ -30,7 +30,7 @@ const TABLE: Array<[string, (f: Fixture) => Promise<Response>, number[]]> = [
         jsonRequest("POST", { email: f.users.invitee.email, role: "viewer" }),
         ctx({ id: f.documentId }),
       ),
-    [201, 201, 403, 404, 401],
+    [202, 202, 403, 404, 401],
   ],
   [
     "PATCH memberships/:userId (change role)",
@@ -58,8 +58,12 @@ describe("membership routes by role", () => {
         const response = await call(f);
         expect(response.status).toBe(expected[index]);
 
-        const ok = expected[index] === 200 || expected[index] === 201 || expected[index] === 204;
-        if (name.startsWith("POST")) expect(await roleOf(f, "invitee")).toBe(ok ? "viewer" : null);
+        const ok = [200, 202, 204].includes(expected[index]!);
+        // An invitation is held until its address is used; it is not a membership yet.
+        if (name.startsWith("POST")) {
+          expect(await roleOf(f, "invitee")).toBeNull();
+          expect(await getDb().pendingInvite.count()).toBe(ok ? 1 : 0);
+        }
         if (name.startsWith("PATCH"))
           expect(await roleOf(f, "target")).toBe(ok ? "editor" : "viewer");
         if (name.startsWith("DELETE")) expect(await roleOf(f, "target")).toBe(ok ? null : "viewer");
@@ -82,24 +86,11 @@ describe("inviting", () => {
       jsonRequest("POST", { email: f.users.invitee.email.toUpperCase(), role: "editor" }),
       ctx({ id: f.documentId }),
     );
-    expect(asEditor.status).toBe(201);
-    expect(await roleOf(f, "invitee")).toBe("editor");
-  });
-
-  it("answers 409 for a member who is already in, 404 for an unknown email", async () => {
-    const f = await fixture();
-    signInAs(f.users.owner.id);
-    const again = await invite(
-      jsonRequest("POST", { email: f.users.viewer.email, role: "editor" }),
-      ctx({ id: f.documentId }),
-    );
-    expect(again.status).toBe(409);
-    expect(await roleOf(f, "viewer")).toBe("viewer");
-    const unknown = await invite(
-      jsonRequest("POST", { email: "nobody@example.test", role: "viewer" }),
-      ctx({ id: f.documentId }),
-    );
-    expect(unknown.status).toBe(404);
+    expect(asEditor.status).toBe(202);
+    const held = await getDb().pendingInvite.findMany();
+    expect(held).toMatchObject([
+      { email: f.users.invitee.email, role: "editor", invitedById: f.users.editor.id },
+    ]);
   });
 
   it("does not let a viewer or outsider probe which emails are registered", async () => {

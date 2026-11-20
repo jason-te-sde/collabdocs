@@ -95,10 +95,8 @@ async function sessionOf(jar: Jar): Promise<{ user?: { id: string; email: string
 
 describe("credentials sign-in through Auth.js", () => {
   it("signs a registered user in and gives a session that names them", async () => {
-    const created = await register(
-      jsonRequest("POST", { email: "ada@example.test", password: PASSWORD }),
-    );
-    const { user } = await created.json();
+    await register(jsonRequest("POST", { email: "ada@example.test", password: PASSWORD }));
+    const user = await getDb().user.findUniqueOrThrow({ where: { email: "ada@example.test" } });
     const jar = new Jar();
     expect(await sessionOf(jar)).toBeNull();
 

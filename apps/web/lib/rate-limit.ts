@@ -131,6 +131,13 @@ export function authLimits() {
         windowSeconds: ONE_HOUR,
       },
     },
+    invite: {
+      perUser: { limit: limitFromEnv("AUTH_LIMIT_INVITE_PER_USER", 30), windowSeconds: ONE_HOUR },
+      perAddress: {
+        limit: limitFromEnv("AUTH_LIMIT_INVITE_PER_ADDRESS", 5),
+        windowSeconds: ONE_HOUR,
+      },
+    },
     verifyResend: {
       perAccount: {
         limit: limitFromEnv("AUTH_LIMIT_VERIFY_RESEND_PER_ACCOUNT", 3),
@@ -225,6 +232,28 @@ export function enforceSignInLimit(ip: string, email: string | null, limiter?: R
 
 export function enforceRegisterLimit(ip: string, email: string | null, limiter?: RateLimiter) {
   return enforce("register", ip, email, authLimits().register, limiter);
+}
+
+/**
+ * Inviting: per user, so that addresses cannot be probed or mail sent without bound, and
+ * per address, so that one person's inbox cannot be flooded by many inviters.
+ */
+export async function enforceInviteLimit(
+  userId: string,
+  email: string,
+  limiter: RateLimiter = shared,
+): Promise<void> {
+  const { perUser, perAddress } = authLimits().invite;
+  const hits = [
+    await limiter.hit(`invite:user:${userId}`, perUser.limit, perUser.windowSeconds),
+    await limiter.hit(
+      `invite:address:${accountKey(email)}`,
+      perAddress.limit,
+      perAddress.windowSeconds,
+    ),
+  ];
+  const refused = hits.filter((hit) => !hit.allowed);
+  if (refused.length > 0) throw rateLimited(Math.max(...refused.map((h) => h.retryAfterSeconds)));
 }
 
 export function enforceVerifyResendLimit(email: string, limiter?: RateLimiter) {

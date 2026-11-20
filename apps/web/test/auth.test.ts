@@ -3,7 +3,7 @@ import { POST as register } from "@/app/api/register/route";
 import { authenticate } from "@/lib/credentials";
 import { getDb } from "@/lib/db";
 import { GET as listDocuments, POST as createDocument } from "@/app/api/documents/route";
-import { jsonRequest } from "./helpers";
+import { jsonRequest, mailTo } from "./helpers";
 
 const PASSWORD = "correct horse battery staple";
 
@@ -16,8 +16,8 @@ describe("registration", () => {
     const response = await signUp("Ada@Example.Test", PASSWORD, "Ada");
     expect(response.status).toBe(201);
     const { user } = await response.json();
-    expect(user.email).toBe("ada@example.test");
-    const row = await getDb().user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(user).toEqual({ email: "ada@example.test", name: "Ada" });
+    const row = await getDb().user.findUniqueOrThrow({ where: { email: "ada@example.test" } });
     expect(row.passwordHash).toMatch(/^\$argon2id\$/);
     expect(row.passwordHash).not.toContain(PASSWORD);
   });
@@ -27,9 +27,29 @@ describe("registration", () => {
     expect(JSON.stringify(body)).not.toContain("argon2");
   });
 
-  it("refuses a duplicate email, whatever its case", async () => {
-    await signUp("dup@example.test");
-    expect((await signUp("DUP@example.test")).status).toBe(409);
+  it("answers the same for an address that already has an account, and changes nothing", async () => {
+    const first = await signUp("dup@example.test", PASSWORD, "First");
+    const original = await getDb().user.findUniqueOrThrow({ where: { email: "dup@example.test" } });
+    const again = await signUp("DUP@example.test", "another long password", "Second");
+    expect(again.status).toBe(first.status);
+    expect(await again.json()).toEqual({
+      user: { email: "dup@example.test", name: "Second" },
+      verification: "sent",
+    });
+    expect(await getDb().user.count()).toBe(1);
+    const after = await getDb().user.findUniqueOrThrow({ where: { email: "dup@example.test" } });
+    expect(after).toEqual(original);
+    // The owner of the address is told by email, in words only they see.
+    const mails = await mailTo("dup@example.test");
+    expect(mails).toHaveLength(2);
+    expect(mails[1]!.text).toContain("already have an account");
+    expect(mails[1]!.text).not.toContain("token=");
+  });
+
+  it("answers the same when two registrations of one address race", async () => {
+    const responses = await Promise.all([1, 2, 3, 4].map(() => signUp("race@example.test")));
+    expect(responses.map((r) => r.status)).toEqual([201, 201, 201, 201]);
+    expect(await getDb().user.count()).toBe(1);
   });
 
   it("refuses a short password, a bad email and a non-JSON body", async () => {

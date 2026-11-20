@@ -78,12 +78,12 @@ export const listMembers = (id: string) =>
     `/api/documents/${encodeURIComponent(id)}/memberships`,
   );
 
-/** Either the new membership, or, for an address that is not verified yet, a pending invitation. */
+/** The invitation that is now held; it is the same answer for every address. */
 export const inviteMember = (id: string, email: string, role: AssignableRole) =>
-  api<{ membership?: Member; invitation?: Invitation }>(
-    `/api/documents/${encodeURIComponent(id)}/memberships`,
-    { method: "POST", body: { email, role } },
-  );
+  api<{ invitation: Invitation }>(`/api/documents/${encodeURIComponent(id)}/memberships`, {
+    method: "POST",
+    body: { email, role },
+  });
 
 export const cancelInvitation = (id: string, inviteId: string) =>
   api(`/api/documents/${encodeURIComponent(id)}/invitations/${encodeURIComponent(inviteId)}`, {

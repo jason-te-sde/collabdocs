@@ -43,10 +43,10 @@ describe("registration is rate limited", () => {
   it("per account, so that one address cannot be hammered from many clients", async () => {
     process.env.AUTH_LIMIT_REGISTER_PER_ACCOUNT = "2";
     expect((await signUp("target@example.test", "203.0.113.1")).status).toBe(201);
-    expect((await signUp("target@example.test", "203.0.113.2")).status).toBe(409);
-    // The third attempt is refused as too many, not answered with "already taken".
+    expect((await signUp("target@example.test", "203.0.113.2")).status).toBe(201);
+    // The third attempt is refused as too many, and sends nothing.
     expect((await signUp("Target@Example.Test", "203.0.113.3")).status).toBe(429);
-    expect((await mailTo("target@example.test")).length).toBe(1);
+    expect((await mailTo("target@example.test")).length).toBe(2);
   });
 });
 

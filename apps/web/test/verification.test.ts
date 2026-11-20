@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as register } from "@/app/api/register/route";
 import { POST as resend } from "@/app/api/verify-email/resend/route";
 import { POST as verify } from "@/app/api/verify-email/route";
@@ -50,6 +50,55 @@ describe("email verification", () => {
     const again = await confirm(token);
     expect(again.status).toBe(400);
     expect((await again.json()).error.code).toBe("invalid_token");
+  });
+
+  it("works once even when the same link is used at the same moment", async () => {
+    await signUp("rush@example.test");
+    const token = await verificationTokenFor("rush@example.test");
+    // Hold both requests after they have read the token, so that both see it before
+    // either has removed it: the case that only the row count of the delete decides.
+    const db = getDb();
+    const real = db.$transaction.bind(db) as unknown as (
+      fn: (tx: unknown) => Promise<unknown>,
+    ) => Promise<unknown>;
+    let readers = 0;
+    let release!: () => void;
+    const both = new Promise<void>((resolve) => (release = resolve));
+    const spy = vi.spyOn(db, "$transaction").mockImplementation(((
+      fn: (tx: unknown) => Promise<unknown>,
+    ) =>
+      real((tx) =>
+        fn(
+          new Proxy(tx as object, {
+            get(target, property, receiver) {
+              const value = Reflect.get(target, property, receiver) as unknown;
+              if (property !== "verificationToken") return value;
+              return new Proxy(value as object, {
+                get(model, method) {
+                  const original = Reflect.get(model, method) as (
+                    ...a: unknown[]
+                  ) => Promise<unknown>;
+                  if (method !== "findUnique") return original.bind(model);
+                  return async (...args: unknown[]) => {
+                    const row = await original.apply(model, args);
+                    readers += 1;
+                    if (readers === 2) release();
+                    await Promise.race([both, new Promise((r) => setTimeout(r, 500))]);
+                    return row;
+                  };
+                },
+              });
+            },
+          }),
+        ),
+      )) as never);
+    try {
+      const answers = await Promise.all([confirm(token), confirm(token)]);
+      expect(readers).toBe(2);
+      expect(answers.map((r) => r.status).sort()).toEqual([200, 400]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("refuses an expired token, an unknown one and one that was altered", async () => {

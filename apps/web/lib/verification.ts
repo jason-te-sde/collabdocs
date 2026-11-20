@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { can } from "@collabdocs/shared";
 import type { Prisma } from "@prisma/client";
 import { getDb } from "./db";
 import { normalizeEmail } from "./email";
@@ -11,7 +12,7 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function appUrl(): string {
+export function appUrl(): string {
   return (process.env.AUTH_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 }
 
@@ -53,25 +54,92 @@ export async function sendVerificationEmail(email: string, now = Date.now()): Pr
  * Turns invitations to this address into memberships. Called when the address has
  * been verified, in the same transaction, so a pending invitation is never both
  * kept and applied.
+ *
+ * An invitation binds only if the member who sent it may still share at this
+ * moment: an inviter who was removed, or demoted to a role that cannot share, in the
+ * meantime must not be able to grant access through an invitation left behind. Such
+ * an invitation is deleted and the fact is logged. `documentId` limits the binding to
+ * one document.
  */
 export async function bindPendingInvites(
   tx: Prisma.TransactionClient,
   userId: string,
   email: string,
+  documentId?: string,
 ): Promise<number> {
-  const invites = await tx.pendingInvite.findMany({ where: { email: normalizeEmail(email) } });
-  if (invites.length === 0) return 0;
-  await tx.membership.createMany({
-    data: invites.map((invite) => ({
-      documentId: invite.documentId,
-      userId,
-      role: invite.role,
-    })),
-    // Already a member (through an owner membership, say): keep that one.
-    skipDuplicates: true,
+  const invites = await tx.pendingInvite.findMany({
+    where: { email: normalizeEmail(email), ...(documentId ? { documentId } : {}) },
   });
+  if (invites.length === 0) return 0;
+  const bind: typeof invites = [];
+  for (const invite of invites) {
+    const inviter = await tx.membership.findUnique({
+      where: { documentId_userId: { documentId: invite.documentId, userId: invite.invitedById } },
+      select: { role: true },
+    });
+    if (inviter && can(inviter.role, "share")) {
+      bind.push(invite);
+    } else {
+      console.warn("dropped a pending invitation: its inviter may no longer share", {
+        documentId: invite.documentId,
+        inviteId: invite.id,
+        inviterId: invite.invitedById,
+        inviterRole: inviter?.role ?? null,
+      });
+    }
+  }
+  if (bind.length > 0) {
+    await tx.membership.createMany({
+      data: bind.map((invite) => ({
+        documentId: invite.documentId,
+        userId,
+        role: invite.role,
+      })),
+      // Already a member (through an owner membership, say): keep that one.
+      skipDuplicates: true,
+    });
+  }
   await tx.pendingInvite.deleteMany({ where: { id: { in: invites.map((i) => i.id) } } });
-  return invites.length;
+  return bind.length;
+}
+
+/**
+ * Sent when someone registers an address that already has an account. The answer to the
+ * person at the keyboard is the same as for a new address; this is what the owner of the
+ * address learns, in their own inbox. It carries no token and nothing that signs in.
+ */
+export async function sendAccountExistsEmail(email: string): Promise<void> {
+  await getMailer().send({
+    to: normalizeEmail(email),
+    subject: "You already have a CollabDocs account",
+    text: [
+      "Someone tried to create a CollabDocs account with this email address, but you already have an account.",
+      "",
+      `If it was you, sign in at ${appUrl()}/sign-in instead. If you do not remember your password, note that password reset is not available yet.`,
+      "",
+      "If it was not you, ignore this message: nothing has changed.",
+    ].join("\n"),
+  });
+}
+
+/**
+ * Applies the invitations held for a user whose address is verified: what an invitation
+ * to a registered address becomes when its owner next opens the app. Doing it here, and
+ * not when the invitation is sent, keeps the answer to the inviter the same for every
+ * address. A user whose address is not verified gets nothing.
+ */
+export async function bindInvitesFor(userId: string, documentId?: string): Promise<number> {
+  const db = getDb();
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { email: true, emailVerified: true },
+  });
+  if (!user?.emailVerified) return 0;
+  const waiting = await db.pendingInvite.count({
+    where: { email: user.email, ...(documentId ? { documentId } : {}) },
+  });
+  if (waiting === 0) return 0;
+  return db.$transaction((tx) => bindPendingInvites(tx, userId, user.email, documentId));
 }
 
 export type VerifyResult = { ok: true; email: string } | { ok: false };

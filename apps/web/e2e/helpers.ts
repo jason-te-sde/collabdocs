@@ -83,7 +83,7 @@ export async function share(
   const response = await owner.page.request.post(`/api/documents/${documentId}/memberships`, {
     data: { email: invitee.email, role },
   });
-  expect(response.status()).toBe(201);
+  expect(response.status()).toBe(202);
 }
 
 export const editor = (page: Page) => page.getByRole("textbox", { name: "Document body" });

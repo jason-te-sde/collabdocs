@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { handle, HttpError, json, readBody } from "@/lib/api";
+import { handle, json, readBody } from "@/lib/api";
 import { getDb, isUniqueViolation } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
 import { hashPassword, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 import { clientIp, enforceRegisterLimit } from "@/lib/rate-limit";
-import { sendVerificationEmail } from "@/lib/verification";
+import { sendAccountExistsEmail, sendVerificationEmail } from "@/lib/verification";
 
 const schema = z.object({
   email: z.email().max(254),
@@ -19,24 +19,24 @@ export const POST = handle(async (request: Request) => {
   // registering is no way to flood one person's inbox with verification mail.
   await enforceRegisterLimit(clientIp(request.headers), email);
   const passwordHash = await hashPassword(body.password);
+  // The answer is the same whether or not the address has an account: an endpoint that
+  // said "taken" would list the registered addresses for anyone. The owner of an address
+  // that already has an account is told by email instead.
+  let created = false;
   try {
-    const user = await getDb().user.create({
-      data: { email, name: body.name ?? null, passwordHash },
-      select: { id: true, email: true, name: true },
-    });
-    // The account works at once; an unverified address only holds back invitations to it.
-    let verification: "sent" | "failed" = "sent";
-    try {
-      await sendVerificationEmail(email);
-    } catch (error) {
-      console.error("could not send the verification email", error);
-      verification = "failed";
-    }
-    return json({ user, verification }, 201);
+    await getDb().user.create({ data: { email, name: body.name ?? null, passwordHash } });
+    created = true;
   } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new HttpError(409, "email_taken", "An account with this email already exists");
-    }
-    throw error;
+    if (!isUniqueViolation(error)) throw error;
   }
+  let verification: "sent" | "failed" = "sent";
+  try {
+    // The account works at once; an unverified address only holds back invitations to it.
+    if (created) await sendVerificationEmail(email);
+    else await sendAccountExistsEmail(email);
+  } catch (error) {
+    console.error("could not send the registration email", error);
+    verification = "failed";
+  }
+  return json({ user: { email, name: body.name ?? null }, verification }, 201);
 });
