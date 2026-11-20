@@ -112,9 +112,14 @@ export function table(dirs) {
 
 export function render(dirs, repository) {
   const { lines, versions, runs } = table(dirs);
-  const links = runs.map((id) =>
-    repository ? `[${id}](https://github.com/${repository}/actions/runs/${id})` : id,
-  );
+  // A folder named `<run id>-a<N>` is attempt N of that run (a re-run); a plain id is a run.
+  const links = runs.map((name) => {
+    const match = /^(\d+)-a(\d+)$/.exec(name);
+    const [id, attempt] = match ? [match[1], match[2]] : [name, null];
+    const label = attempt ? `${id} attempt ${attempt}` : id;
+    const url = `https://github.com/${repository}/actions/runs/${id}${attempt ? `/attempts/${attempt}` : ""}`;
+    return repository ? `[${label}](${url})` : label;
+  });
   return [
     `Each cell is **min / median / max** of the per-run medians across ${runs.length} runs of the same commit's \`lighthouse\` job: ${links.join(", ")}. Every per-run median is the median of three Lighthouse reports, the number the gate checks. Lighthouse ${versions.join(", ")}, presets \`desktop\` and \`mobile\` (Lighthouse's default mobile emulation, simulated throttling), Chrome on a GitHub-hosted \`ubuntu-24.04\` runner. "Lowest single performance" is the worst of all the individual reports.`,
     "",

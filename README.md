@@ -80,6 +80,18 @@ CI fails when performance or accessibility is below 0.92 on any of three pages, 
 
 <!-- prettier-ignore-start -->
 <!-- lighthouse-table:start -->
+
+Each cell is **min / median / max** of the per-run medians across 3 runs of the same commit's `lighthouse` job: [44801088199 attempt 1](https://github.com/jason-te-sde/collabdocs/actions/runs/44801088199/attempts/1), [44801088199 attempt 2](https://github.com/jason-te-sde/collabdocs/actions/runs/44801088199/attempts/2), [44801088199 attempt 3](https://github.com/jason-te-sde/collabdocs/actions/runs/44801088199/attempts/3). Every per-run median is the median of three Lighthouse reports, the number the gate checks. Lighthouse 13.6.0, presets `desktop` and `mobile` (Lighthouse's default mobile emulation, simulated throttling), Chrome on a GitHub-hosted `ubuntu-24.04` runner. "Lowest single performance" is the worst of all the individual reports.
+
+| Page | Preset | Performance | Lowest single performance | Accessibility | LCP ms | TBT ms | CLS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Sign-in (`/sign-in`, signed out) | desktop | 1.00 / 1.00 / 1.00 | 0.98 | 1.00 / 1.00 / 1.00 | 176 / 177 / 182 | 0 / 0 / 0 | 0.000 / 0.000 / 0.000 |
+| Document list (`/documents`, signed in) | desktop | 1.00 / 1.00 / 1.00 | 0.99 | 1.00 / 1.00 / 1.00 | 274 / 275 / 275 | 0 / 0 / 0 | 0.000 / 0.000 / 0.000 |
+| Editor (`/documents/:id`, signed in, seeded) | desktop | 1.00 / 1.00 / 1.00 | 1.00 | 1.00 / 1.00 / 1.00 | 318 / 334 / 338 | 0 / 0 / 0 | 0.022 / 0.022 / 0.022 |
+| Sign-in (`/sign-in`, signed out) | mobile | 1.00 / 1.00 / 1.00 | 0.98 | 1.00 / 1.00 / 1.00 | 630 / 633 / 656 | 31 / 72 / 84 | 0.000 / 0.000 / 0.000 |
+| Document list (`/documents`, signed in) | mobile | 0.99 / 1.00 / 1.00 | 0.93 | 1.00 / 1.00 / 1.00 | 969 / 975 / 978 | 40 / 76 / 98 | 0.000 / 0.000 / 0.000 |
+| Editor (`/documents/:id`, signed in, seeded) | mobile | 0.98 / 0.98 / 0.99 | 0.95 | 1.00 / 1.00 / 1.00 | 1131 / 1205 / 1280 | 148 / 153 / 178 | 0.000 / 0.000 / 0.046 |
+
 <!-- lighthouse-table:end -->
 <!-- prettier-ignore-end -->
 
