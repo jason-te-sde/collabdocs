@@ -164,3 +164,87 @@ jobs:
             apps/web/playwright-report
             apps/web/test-results
           retention-days: 7
+
+  # Lighthouse CI: a production build, the collab server, PostgreSQL and Redis,
+  # three pages (sign-in, the document list, the editor), desktop preset, three
+  # runs each. Performance and accessibility must each be at least 0.92 on the
+  # median, or this job fails. The scores in the README come from a run of this job.
+  lighthouse:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: collabdocs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/collabdocs
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: lighthouse-auth-secret-that-is-long-enough-0123456789
+      AUTH_URL: http://localhost:3000
+      AUTH_TRUST_HOST: "true"
+      COLLAB_TOKEN_SECRET: lighthouse-collab-secret-0123456789-abcdefghijklmnop
+      REDIS_MESSAGE_SECRET: lighthouse-redis-message-secret-0123456789-abcdefg
+      COLLAB_URL: http://localhost:4000
+      COLLAB_CORS_ORIGIN: http://localhost:3000
+      MAIL_TRANSPORT: file
+      MAIL_OUTBOX_DIR: ${{ runner.temp }}/mail
+      WEB_URL: http://localhost:3000
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install Lighthouse CI (not a project dependency)
+        run: npm install --no-save --no-package-lock @lhci/cli@0.16.1 puppeteer-core@25.18.1
+      - run: npm run db:deploy
+      - name: Build the web app
+        run: npm run build -w apps/web
+      - name: Start the collab server and the web app (production build)
+        run: |
+          mkdir -p "$MAIL_OUTBOX_DIR"
+          nohup npm run start -w @collabdocs/collab > collab.log 2>&1 &
+          nohup npm run start -w @collabdocs/web > web.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:4000/healthz >/dev/null && curl -fsS http://localhost:3000/sign-in >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat collab.log web.log
+          exit 1
+      - name: Seed a verified user and a document
+        run: node scripts/lighthouse/seed.mjs
+      - name: Lighthouse (median of three runs, desktop preset)
+        run: npx lhci autorun --config=./lighthouserc.cjs
+      - name: Median scores per page
+        if: always()
+        run: node scripts/lighthouse/summarize.mjs
+      - name: Server logs
+        if: failure()
+        run: tail -n 100 collab.log web.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: lighthouse-reports
+          path: .lighthouseci
+          retention-days: 14
