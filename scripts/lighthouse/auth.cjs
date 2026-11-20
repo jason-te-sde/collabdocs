@@ -34,7 +34,10 @@ module.exports = async (browser, { url }) => {
 
     await page.goto(url, { waitUntil: "networkidle0" });
     await page.waitForSelector('[data-testid="connection-status"][data-state="connected"]');
-    await page.click('[role="textbox"][aria-label="Document body"]');
+    const textbox = '[role="textbox"][aria-label="Document body"]';
+    // Text is typed once: the seeded document keeps it between the runs of one job.
+    if ((await page.$eval(textbox, (node) => node.textContent ?? "")).length > 0) return;
+    await page.click(textbox);
     for (const paragraph of PARAGRAPHS) {
       await page.keyboard.type(paragraph);
       await page.keyboard.press("Enter");

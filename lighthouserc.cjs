@@ -10,6 +10,9 @@ if (!existsSync(seedFile))
   throw new Error(`${seedFile} is missing; run scripts/lighthouse/seed.mjs first`);
 const { documentId } = JSON.parse(readFileSync(seedFile, "utf8"));
 
+// Desktop preset by default; LH_FORM_FACTOR=mobile uses Lighthouse's default (mobile) emulation.
+const mobile = process.env.LH_FORM_FACTOR === "mobile";
+
 const median = { minScore: 0.92, aggregationMethod: "median" };
 
 module.exports = {
@@ -22,7 +25,7 @@ module.exports = {
       chromePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
       puppeteerLaunchOptions: { args: ["--no-sandbox", "--disable-dev-shm-usage"] },
       settings: {
-        preset: "desktop",
+        ...(mobile ? {} : { preset: "desktop" }),
         onlyCategories: ["performance", "accessibility"],
         disableStorageReset: true,
       },

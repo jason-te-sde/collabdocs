@@ -236,9 +236,24 @@ jobs:
         run: node scripts/lighthouse/seed.mjs
       - name: Lighthouse (median of three runs, desktop preset)
         run: npx lhci autorun --config=./lighthouserc.cjs
-      - name: Median scores per page
+      - name: Keep the desktop reports
         if: always()
-        run: node scripts/lighthouse/summarize.mjs
+        run: mv .lighthouseci .lighthouseci-desktop
+      - name: Lighthouse, mobile emulation (not gated; reported in the README)
+        continue-on-error: true
+        env:
+          LH_FORM_FACTOR: mobile
+        run: npx lhci autorun --config=./lighthouserc.cjs
+      - name: Keep the mobile reports
+        if: always()
+        run: mv .lighthouseci .lighthouseci-mobile || true
+      - name: Median scores per page, desktop
+        if: always()
+        run: node scripts/lighthouse/summarize.mjs .lighthouseci-desktop
+      - name: Median scores per page, mobile
+        if: always()
+        continue-on-error: true
+        run: node scripts/lighthouse/summarize.mjs .lighthouseci-mobile
       - name: Server logs
         if: failure()
         run: tail -n 100 collab.log web.log
@@ -246,6 +261,8 @@ jobs:
         if: always()
         with:
           name: lighthouse-reports
-          path: .lighthouseci
+          path: |
+            .lighthouseci-desktop
+            .lighthouseci-mobile
           include-hidden-files: true
           retention-days: 14

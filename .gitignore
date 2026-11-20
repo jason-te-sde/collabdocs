@@ -12,5 +12,5 @@ test-results/
 .DS_Store
 .vercel/
 next-env.d.ts
-.lighthouseci/
+.lighthouseci*/
 .lighthouseci-seed.json
