@@ -206,7 +206,7 @@ jobs:
       COLLAB_URL: http://localhost:4000
       COLLAB_CORS_ORIGIN: http://localhost:3000
       MAIL_TRANSPORT: file
-      MAIL_OUTBOX_DIR: ${{ runner.temp }}/mail
+      MAIL_OUTBOX_DIR: /tmp/collabdocs-mail
       WEB_URL: http://localhost:3000
       CHROME_PATH: /usr/bin/google-chrome
     steps:
