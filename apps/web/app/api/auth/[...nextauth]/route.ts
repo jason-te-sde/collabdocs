@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { handlers } from "@/auth";
 import { handle, HttpError, MAX_BODY_BYTES, readCappedBytes } from "@/lib/api";
+import { reachesCredentials } from "@/lib/credentials-path";
 import { clientIp, enforceSignInLimit } from "@/lib/rate-limit";
 
 export const { GET } = handlers;
@@ -53,7 +54,7 @@ function emailOf(type: string, bytes: Uint8Array<ArrayBuffer>): string | null {
  * is given those same bytes.
  */
 export const POST = handle(async (request: NextRequest) => {
-  if (!new URL(request.url).pathname.endsWith("/callback/credentials")) {
+  if (!reachesCredentials(new URL(request.url).pathname)) {
     return handlers.POST(request);
   }
   const bytes = await readCappedBytes(request, MAX_BODY_BYTES);

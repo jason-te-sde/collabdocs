@@ -198,6 +198,52 @@ describe("sign-in rate limits through the real route", () => {
     }
   }
 
+  // Auth.js reads the action and the provider from the path after /api/auth, ignoring empty
+  // segments (`parseActionAndProviderId`), so several spellings reach the same sign-in.
+  // The limiter has to treat all of them alike.
+  const SPELLINGS = [
+    "/api/auth/callback/credentials",
+    "/api/auth/callback/credentials/",
+    "/api/auth/callback/credentials//",
+    "/api/auth//callback/credentials",
+    "/api/auth/callback//credentials",
+    "/api/auth//callback//credentials//",
+    "/api/auth/callback/credentials?x=1",
+    "/api/auth/callback/credentials/?x=1",
+    "/api/auth/callback/Credentials",
+    "/api/auth/callback/%63redentials",
+    "/api/auth/signin/credentials",
+    "/api/auth/signin/credentials/",
+  ];
+
+  for (const spelling of SPELLINGS) {
+    it(`limits the sign-in at ${spelling} once the account limit is used up`, async () => {
+      await useUpTheAccountLimit();
+      const jar = new Jar();
+      const csrf = await csrfToken(jar);
+      const headers = new Headers({
+        "content-type": "application/x-www-form-urlencoded",
+        "x-forwarded-for": "198.51.100.91",
+      });
+      headers.set("cookie", jar.header);
+      const response = await POST(
+        new NextRequest(`http://localhost${spelling}`, {
+          method: "POST",
+          headers,
+          body: new URLSearchParams({
+            csrfToken: csrf,
+            email: "ada@example.test",
+            password: PASSWORD,
+          }).toString(),
+          redirect: "manual",
+        }),
+      );
+      expect(response.status).toBe(429);
+      jar.absorb(response);
+      expect(jar.has("session-token")).toBe(false);
+    });
+  }
+
   it("counts a JSON body against the account, and refuses it once the limit is used up", async () => {
     await useUpTheAccountLimit();
     const jar = new Jar();
