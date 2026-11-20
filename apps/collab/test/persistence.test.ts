@@ -236,3 +236,22 @@ describe("a failed compaction", () => {
     expect(await storedText(f.documentId)).toBe("ab");
   });
 });
+
+describe("the document's modification time", () => {
+  it("moves when content is edited", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    const modified = async () =>
+      (
+        await db().query<{ at: Date }>('SELECT "updatedAt" AS at FROM "Document" WHERE "id" = $1', [
+          f.documentId,
+        ])
+      ).rows[0]!.at.getTime();
+    const before = await modified();
+    await settle(20);
+    const a = await TestClient.connect(server, f, "owner", "owner");
+    a.insert(0, "edit");
+    await waitForRows(f.documentId, 1);
+    expect(await modified()).toBeGreaterThan(before);
+  });
+});

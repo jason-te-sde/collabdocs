@@ -157,6 +157,8 @@ export class DocumentStore {
           values,
         );
       }
+      // A content edit is a change to the document: "newest first" lists by this column.
+      await client.query('UPDATE "Document" SET "updatedAt" = now() WHERE "id" = $1', [documentId]);
       await client.query("COMMIT");
       return seq;
     } catch (error) {

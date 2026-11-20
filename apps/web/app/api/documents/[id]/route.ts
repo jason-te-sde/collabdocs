@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   handle,
+  HttpError,
   json,
   noContent,
   readBody,
@@ -17,7 +18,9 @@ export const GET = handle(async (_request: Request, { params }: DocumentContext)
   const { id } = await params;
   const user = await requireUser();
   const role = await requireRole(id, user.id, "read");
-  const document = await getDb().document.findUniqueOrThrow({ where: { id } });
+  // The document can be deleted between the permission check and this read.
+  const document = await getDb().document.findUnique({ where: { id } });
+  if (!document) throw new HttpError(404, "not_found", "Document not found");
   return json({ document: { ...document, role } });
 });
 

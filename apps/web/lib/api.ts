@@ -22,6 +22,15 @@ export function noContent(): Response {
   return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
 }
 
+function isRecordNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2025"
+  );
+}
+
 /** Runs a handler and turns an HttpError into a JSON error body. Anything else is a 500 with no detail. */
 export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response>) {
   return async (...args: A): Promise<Response> => {
@@ -30,6 +39,11 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
     } catch (error) {
       if (error instanceof HttpError) {
         return json({ error: { code: error.code, message: error.message } }, error.status);
+      }
+      // Prisma's "record to update or delete not found": the row went away between
+      // the permission check and the write, which is a 404 and not a server error.
+      if (isRecordNotFound(error)) {
+        return json({ error: { code: "not_found", message: "Not found" } }, 404);
       }
       console.error("unhandled error in a route", error);
       return json({ error: { code: "internal", message: "Internal server error" } }, 500);
