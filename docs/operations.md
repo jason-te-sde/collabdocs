@@ -35,16 +35,17 @@ Generate each secret with `openssl rand -base64 32`. The three secrets must all 
 
 ### Web app limits
 
-| Variable                               | Default | Window     | What it limits                                                                                             |
-| -------------------------------------- | ------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
-| `AUTH_LIMIT_SIGNIN_PER_IP`             | 30      | 15 minutes | Sign-in attempts from one client address                                                                   |
-| `AUTH_LIMIT_SIGNIN_PER_ACCOUNT`        | 10      | 15 minutes | Sign-in attempts for one email address, from anywhere                                                      |
-| `AUTH_LIMIT_REGISTER_PER_IP`           | 10      | 1 hour     | Registrations from one client address                                                                      |
-| `AUTH_LIMIT_REGISTER_PER_ACCOUNT`      | 3       | 1 hour     | Registrations for one email address                                                                        |
-| `AUTH_LIMIT_VERIFY_RESEND_PER_ACCOUNT` | 3       | 1 hour     | New verification links for one account                                                                     |
-| `AUTH_LIMIT_INVITE_PER_USER`           | 30      | 1 hour     | Invitations one user sends                                                                                 |
-| `AUTH_LIMIT_INVITE_PER_ADDRESS`        | 5       | 1 hour     | Invitations sent to one address                                                                            |
-| `TRUSTED_PROXY_HOPS`                   | 1       |            | How many proxies append to `X-Forwarded-For`. `0` ignores the header: every client then shares one address |
+| Variable                                | Default | Window     | What it limits                                                                                             |
+| --------------------------------------- | ------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| `AUTH_LIMIT_SIGNIN_PER_IP`              | 30      | 15 minutes | Sign-in attempts from one client address                                                                   |
+| `AUTH_LIMIT_SIGNIN_PER_ACCOUNT`         | 10      | 15 minutes | Sign-in attempts for one email address, from anywhere                                                      |
+| `AUTH_LIMIT_REGISTER_PER_IP`            | 10      | 1 hour     | Registrations from one client address                                                                      |
+| `AUTH_LIMIT_REGISTER_PER_ACCOUNT`       | 3       | 1 hour     | Registrations for one email address                                                                        |
+| `AUTH_LIMIT_VERIFY_RESEND_PER_ACCOUNT`  | 3       | 1 hour     | New verification links for one account                                                                     |
+| `AUTH_LIMIT_INVITE_PER_USER`            | 30      | 1 hour     | Invitations one user sends                                                                                 |
+| `AUTH_LIMIT_INVITE_PER_INVITER_ADDRESS` | 3       | 1 hour     | Invitations one member sends to one address                                                                |
+| `AUTH_LIMIT_INVITE_MAIL_PER_ADDRESS`    | 5       | 1 hour     | Invitation mails to one address, all inviters together; past it the invitation stands and no mail is sent  |
+| `TRUSTED_PROXY_HOPS`                    | 1       |            | How many proxies append to `X-Forwarded-For`. `0` ignores the header: every client then shares one address |
 
 Every attempt counts, successful or not. The answer past a limit is HTTP 429 with `Retry-After` and the code `rate_limited`. Raise a limit when many real users share one address (an office, a university); lower it when the account key is the one being attacked. Run the web app behind a proxy that sets `X-Forwarded-For` and set `TRUSTED_PROXY_HOPS` to the number of proxies: without a proxy the per-address limits are one shared bucket for all clients.
 

@@ -9,9 +9,12 @@ export const DELETE = handle(async (_request: Request, { params }: InvitationCon
   const user = await requireUser();
   await requireRole(id, user.id, "change-role");
   // Scoped to the document in the URL: an id from another document is not found.
-  const { count } = await getDb().pendingInvite.deleteMany({
+  const invitation = await getDb().pendingInvite.findFirst({
     where: { id: inviteId, documentId: id },
+    select: { email: true },
   });
-  if (count === 0) throw new HttpError(404, "not_found", "Invitation not found");
+  if (!invitation) throw new HttpError(404, "not_found", "Invitation not found");
+  // The list shows one entry per address, so withdrawing it withdraws every member's invitation to it.
+  await getDb().pendingInvite.deleteMany({ where: { documentId: id, email: invitation.email } });
   return noContent();
 });

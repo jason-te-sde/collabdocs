@@ -366,7 +366,8 @@ describe("withdrawing an invitation", () => {
 describe("the invite route is rate limited", () => {
   afterEach(() => {
     process.env.AUTH_LIMIT_INVITE_PER_USER = "1000";
-    process.env.AUTH_LIMIT_INVITE_PER_ADDRESS = "1000";
+    process.env.AUTH_LIMIT_INVITE_PER_INVITER_ADDRESS = "1000";
+    process.env.AUTH_LIMIT_INVITE_MAIL_PER_ADDRESS = "1000";
   });
 
   it("per user, so that addresses cannot be probed without bound", async () => {
@@ -385,15 +386,40 @@ describe("the invite route is rate limited", () => {
     expect((await inviteAs(f, "probe5@example.test")).status).toBe(202);
   });
 
-  it("per address, so that one person's inbox cannot be flooded by many inviters", async () => {
-    process.env.AUTH_LIMIT_INVITE_PER_ADDRESS = "2";
+  it("per inviter and address, which another inviter cannot use up", async () => {
+    process.env.AUTH_LIMIT_INVITE_PER_INVITER_ADDRESS = "2";
     const f = await fixture();
-    for (const who of ["owner", "editor"] as const) {
+    signInAs(f.users.editor.id);
+    for (let n = 0; n < 2; n += 1) {
+      expect((await inviteAs(f, "victim@example.test")).status).toBe(202);
+    }
+    // The editor has used up their own invitations to this address...
+    expect((await inviteAs(f, "Victim@Example.Test")).status).toBe(429);
+    // ...which leaves the owner's untouched: no one can keep the owner from inviting it.
+    signInAs(f.users.owner.id);
+    expect((await inviteAs(f, "victim@example.test")).status).toBe(202);
+    expect((await getDb().pendingInvite.findMany()).map((i) => i.invitedById).sort()).toEqual(
+      [f.users.editor.id, f.users.owner.id].sort(),
+    );
+  });
+
+  it("keeps the mail to one address bounded across inviters, without refusing the invitation", async () => {
+    process.env.AUTH_LIMIT_INVITE_MAIL_PER_ADDRESS = "2";
+    const f = await fixture();
+    for (const who of ["owner", "editor", "viewerAsEditor"] as const) {
+      if (who === "viewerAsEditor") continue;
       signInAs(f.users[who].id);
       expect((await inviteAs(f, "victim@example.test")).status).toBe(202);
     }
-    signInAs(f.users.owner.id);
-    expect((await inviteAs(f, "Victim@Example.Test")).status).toBe(429);
+    await getDb().membership.update({
+      where: { documentId_userId: { documentId: f.documentId, userId: f.users.viewer.id } },
+      data: { role: "editor" },
+    });
+    signInAs(f.users.viewer.id);
+    const third = await inviteAs(f, "victim@example.test");
+    // The same answer and a stored invitation; only the mail is held back.
+    expect(third.status).toBe(202);
+    expect(await getDb().pendingInvite.count()).toBe(3);
     expect(await mailTo("victim@example.test")).toHaveLength(2);
   });
 
@@ -424,5 +450,101 @@ describe("the database refuses what an invitation must never be", () => {
       }),
     ).rejects.toThrow();
     await getDb().pendingInvite.create({ data: { ...data, role: "editor" } });
+  });
+});
+
+describe("several members inviting one address", () => {
+  it("keeps the first inviter's invitation when a second member invites the same address", async () => {
+    const f = await fixture();
+    const stranger = await createUser("stranger", false);
+    signInAs(f.users.owner.id);
+    await inviteAs(f, stranger.email, "viewer");
+    signInAs(f.users.editor.id);
+    await inviteAs(f, stranger.email, "editor");
+    const rows = await getDb().pendingInvite.findMany({ orderBy: { createdAt: "asc" } });
+    expect(rows.map((r) => [r.invitedById, r.role])).toEqual([
+      [f.users.owner.id, "viewer"],
+      [f.users.editor.id, "editor"],
+    ]);
+
+    // Removing the second sharer deletes only their invitation; the owner's still binds.
+    signInAs(f.users.owner.id);
+    await removeMember(jsonRequest("DELETE"), ctx({ id: f.documentId, userId: f.users.editor.id }));
+    expect((await getDb().pendingInvite.findMany()).map((r) => r.invitedById)).toEqual([
+      f.users.owner.id,
+    ]);
+    await verifyAddress(stranger.email);
+    expect((await membershipOf(f, stranger.id))?.role).toBe("viewer");
+  });
+
+  it("binds with the role of the oldest invitation whose inviter may still share", async () => {
+    const f = await fixture();
+    const stranger = await createUser("stranger", false);
+    signInAs(f.users.editor.id);
+    await inviteAs(f, stranger.email, "editor");
+    signInAs(f.users.owner.id);
+    await inviteAs(f, stranger.email, "viewer");
+    // The first inviter may no longer share (changed directly in the database).
+    await getDb().membership.update({
+      where: { documentId_userId: { documentId: f.documentId, userId: f.users.editor.id } },
+      data: { role: "viewer" },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await verifyAddress(stranger.email);
+    expect((await membershipOf(f, stranger.id))?.role).toBe("viewer");
+    expect(await getDb().pendingInvite.count()).toBe(0);
+  });
+
+  it("lists an address once, and withdrawing it withdraws every member's invitation", async () => {
+    const f = await fixture();
+    signInAs(f.users.owner.id);
+    await inviteAs(f, "twice@example.test", "viewer");
+    signInAs(f.users.editor.id);
+    await inviteAs(f, "twice@example.test", "viewer");
+    const listed = await (await listMembers(jsonRequest("GET"), ctx({ id: f.documentId }))).json();
+    expect(listed.invitations).toHaveLength(1);
+    signInAs(f.users.owner.id);
+    const response = await withdraw(
+      jsonRequest("DELETE"),
+      ctx({ id: f.documentId, inviteId: listed.invitations[0].id }),
+    );
+    expect(response.status).toBe(204);
+    expect(await getDb().pendingInvite.count()).toBe(0);
+  });
+});
+
+describe("the invitation mail", () => {
+  it("has a fixed subject and a flattened, shortened title and name in the body", async () => {
+    const f = await fixture();
+    await getDb().document.update({
+      where: { id: f.documentId },
+      data: { title: `Win a prize\nBcc: x@example.test\r\n${"A".repeat(150)}` },
+    });
+    await getDb().user.update({
+      where: { id: f.users.owner.id },
+      data: { name: "Eve\nFrom: ceo" },
+    });
+    signInAs(f.users.owner.id);
+    await inviteAs(f, "victim@example.test", "viewer");
+    const [mail] = await mailTo("victim@example.test");
+    expect(mail!.subject).toBe("You were invited to a document on CollabDocs");
+    const first = mail!.text.split("\n")[0]!;
+    expect(first).toContain("Eve From: ceo invited you to");
+    expect(first).not.toContain("\r");
+    expect(first.length).toBeLessThan(200);
+    expect(mail!.text).not.toContain("A".repeat(100));
+  });
+});
+
+describe("the answer for an address that is a member already", () => {
+  it("has an id of the same format and length as a real invitation's", async () => {
+    const f = await fixture();
+    signInAs(f.users.owner.id);
+    const real = (await (await inviteAs(f, "someone@example.test")).json()).invitation.id as string;
+    const decoy = (await (await inviteAs(f, f.users.viewer.email)).json()).invitation.id as string;
+    expect(decoy).toHaveLength(real.length);
+    expect(decoy).toMatch(/^c[a-z0-9]{24}$/);
+    expect(real).toMatch(/^c[a-z0-9]{24}$/);
+    expect(await getDb().pendingInvite.count()).toBe(1);
   });
 });

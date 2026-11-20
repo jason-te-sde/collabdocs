@@ -104,8 +104,10 @@ model Membership {
 }
 
 /// An invitation to an address whose account has not verified it. It grants nothing until
-/// the account verifies that address, which turns it into a Membership. The database
-/// keeps the email lower-case and refuses the owner role.
+/// the account verifies that address, which turns it into a Membership. One row per
+/// inviter: when a second member invites an address, the first inviter's row stays, so
+/// removing one sharer never deletes another's invitation. The database keeps the email
+/// lower-case and refuses the owner role.
 model PendingInvite {
   id          String   @id @default(cuid())
   documentId  String
@@ -117,7 +119,7 @@ model PendingInvite {
   document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   invitedBy User     @relation(fields: [invitedById], references: [id], onDelete: Cascade)
 
-  @@unique([documentId, email])
+  @@unique([documentId, email, invitedById])
   @@index([email])
 }
 

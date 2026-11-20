@@ -91,16 +91,18 @@ export async function bindPendingInvites(
 ): Promise<number> {
   const invites = await tx.pendingInvite.findMany({
     where: { email: normalizeEmail(email), ...(documentId ? { documentId } : {}) },
+    orderBy: { createdAt: "asc" },
   });
   if (invites.length === 0) return 0;
-  const bind: typeof invites = [];
+  // Per document, the oldest invitation whose inviter may still share decides the role.
+  const bind = new Map<string, (typeof invites)[number]>();
   for (const invite of invites) {
     const inviter = await tx.membership.findUnique({
       where: { documentId_userId: { documentId: invite.documentId, userId: invite.invitedById } },
       select: { role: true },
     });
     if (inviter && can(inviter.role, "share")) {
-      bind.push(invite);
+      if (!bind.has(invite.documentId)) bind.set(invite.documentId, invite);
     } else {
       console.warn("dropped a pending invitation: its inviter may no longer share", {
         documentId: invite.documentId,
@@ -110,9 +112,9 @@ export async function bindPendingInvites(
       });
     }
   }
-  if (bind.length > 0) {
+  if (bind.size > 0) {
     await tx.membership.createMany({
-      data: bind.map((invite) => ({
+      data: [...bind.values()].map((invite) => ({
         documentId: invite.documentId,
         userId,
         role: invite.role,
@@ -122,7 +124,7 @@ export async function bindPendingInvites(
     });
   }
   await tx.pendingInvite.deleteMany({ where: { id: { in: invites.map((i) => i.id) } } });
-  return bind.length;
+  return bind.size;
 }
 
 /**

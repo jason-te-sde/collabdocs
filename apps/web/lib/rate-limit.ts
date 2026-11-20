@@ -133,8 +133,14 @@ export function authLimits() {
     },
     invite: {
       perUser: { limit: limitFromEnv("AUTH_LIMIT_INVITE_PER_USER", 30), windowSeconds: ONE_HOUR },
-      perAddress: {
-        limit: limitFromEnv("AUTH_LIMIT_INVITE_PER_ADDRESS", 5),
+      // One inviter to one address: a limit that other inviters cannot use up.
+      perInviterAddress: {
+        limit: limitFromEnv("AUTH_LIMIT_INVITE_PER_INVITER_ADDRESS", 3),
+        windowSeconds: ONE_HOUR,
+      },
+      // Mail to one address, from all inviters. It limits the mail, never the invitation.
+      mailPerAddress: {
+        limit: limitFromEnv("AUTH_LIMIT_INVITE_MAIL_PER_ADDRESS", 5),
         windowSeconds: ONE_HOUR,
       },
     },
@@ -236,24 +242,45 @@ export function enforceRegisterLimit(ip: string, email: string | null, limiter?:
 
 /**
  * Inviting: per user, so that addresses cannot be probed or mail sent without bound, and
- * per address, so that one person's inbox cannot be flooded by many inviters.
+ * per inviter and address, so that one member cannot repeat an invitation to the same inbox.
+ * There is no limit shared by all inviters of an address: such a limit would let anyone who
+ * may share use it up and keep the document's owner from inviting that address.
  */
 export async function enforceInviteLimit(
   userId: string,
   email: string,
   limiter: RateLimiter = shared,
 ): Promise<void> {
-  const { perUser, perAddress } = authLimits().invite;
+  const { perUser, perInviterAddress } = authLimits().invite;
   const hits = [
     await limiter.hit(`invite:user:${userId}`, perUser.limit, perUser.windowSeconds),
     await limiter.hit(
-      `invite:address:${accountKey(email)}`,
-      perAddress.limit,
-      perAddress.windowSeconds,
+      `invite:pair:${userId}:${accountKey(email)}`,
+      perInviterAddress.limit,
+      perInviterAddress.windowSeconds,
     ),
   ];
   const refused = hits.filter((hit) => !hit.allowed);
   if (refused.length > 0) throw rateLimited(Math.max(...refused.map((h) => h.retryAfterSeconds)));
+}
+
+/**
+ * Whether one more invitation mail may go to this address now, counting every inviter. When
+ * it may not, the invitation is still recorded and the answer does not change: only the
+ * mail is withheld, so one person's inbox is not flooded by many accounts, and nobody can
+ * use this up to stop an invitation.
+ */
+export async function allowInviteMail(
+  email: string,
+  limiter: RateLimiter = shared,
+): Promise<boolean> {
+  const { mailPerAddress } = authLimits().invite;
+  const hit = await limiter.hit(
+    `invite:mail:${accountKey(email)}`,
+    mailPerAddress.limit,
+    mailPerAddress.windowSeconds,
+  );
+  return hit.allowed;
 }
 
 export function enforceVerifyResendLimit(email: string, limiter?: RateLimiter) {
