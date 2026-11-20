@@ -107,6 +107,8 @@ model DocumentSnapshot {
   version    Int
   /// Y.encodeStateAsUpdate of the whole document at this version.
   state      Bytes
+  /// The highest DocumentUpdate.seq folded into this snapshot. Later updates have a greater seq.
+  upToSeq    BigInt   @default(0)
   createdAt  DateTime @default(now())
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
