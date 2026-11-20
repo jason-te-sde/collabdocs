@@ -29,10 +29,7 @@ export interface RevokedNotice {
 
 /** Error codes in `error.data.code` of a refused handshake (`connect_error`). */
 export type HandshakeErrorCode =
-  | "invalid_token"
-  | "not_a_member"
-  | "too_many_connections"
-  | "server_error";
+  "invalid_token" | "not_a_member" | "too_many_connections" | "server_error";
 
 /** The Redis channel on which the web app announces membership changes. */
 export const MEMBERSHIP_CHANNEL = "collabdocs:membership";
