@@ -9,6 +9,7 @@ import {
   type DocumentContext,
 } from "@/lib/api";
 import { getDb } from "@/lib/db";
+import { publishMembershipChange } from "@/lib/membership-events";
 
 const renameSchema = z.object({ title: z.string().trim().min(1).max(200) });
 
@@ -34,5 +35,6 @@ export const DELETE = handle(async (_request: Request, { params }: DocumentConte
   const user = await requireUser();
   await requireRole(id, user.id, "delete");
   await getDb().document.delete({ where: { id } });
+  await publishMembershipChange({ documentId: id, userId: null, change: "document-deleted" });
   return noContent();
 });

@@ -11,6 +11,7 @@ import {
   type MemberContext,
 } from "@/lib/api";
 import { getDb } from "@/lib/db";
+import { publishMembershipChange } from "@/lib/membership-events";
 
 const changeSchema = z.object({ role: z.enum(ASSIGNABLE_ROLES) });
 
@@ -36,6 +37,7 @@ export const PATCH = handle(async (request: Request, { params }: MemberContext) 
     where: { documentId_userId: { documentId: id, userId } },
     data: { role },
   });
+  await publishMembershipChange({ documentId: id, userId, change: "role-changed" });
   return json({ membership: { userId, role: updated.role } });
 });
 
@@ -60,5 +62,6 @@ export const DELETE = handle(async (_request: Request, { params }: MemberContext
     );
   }
   await getDb().membership.delete({ where: { documentId_userId: { documentId: id, userId } } });
+  await publishMembershipChange({ documentId: id, userId, change: "removed" });
   return noContent();
 });
