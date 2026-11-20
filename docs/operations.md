@@ -9,7 +9,7 @@ CollabDocs is two Node processes and two data stores:
 - **PostgreSQL**: users, documents, memberships, the update log and snapshots. The only durable store;
 - **Redis**: relay between collab instances, membership messages, connection counters and the web app's rate-limit counters. Holds nothing that cannot be rebuilt.
 
-`docker compose up` (see the README) starts all four with development secrets. Do not use those secrets anywhere else.
+`docker compose up -d` (see the README) starts PostgreSQL and Redis for development; the web app and the collab server run on the host. There is no container image for the two apps yet: build and start them with `npm run build` and `npm run start` on a host that has Node 22.12 or newer.
 
 ## Environment variables
 

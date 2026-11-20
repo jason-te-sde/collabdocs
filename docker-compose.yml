@@ -1,0 +1,42 @@
+# The two services CollabDocs needs for development: PostgreSQL and Redis.
+# The web app and the collab server run on the host (npm run dev, npm run start),
+# see "Run it locally" in the README.
+#
+#   docker compose up -d
+#   DATABASE_URL=postgresql://collabdocs:collabdocs@localhost:5432/collabdocs
+#   REDIS_URL=redis://localhost:6379
+#
+# These credentials are for a database on your own machine. Do not reuse them.
+# Set POSTGRES_PORT or REDIS_PORT if the default port is taken.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: collabdocs
+      POSTGRES_PASSWORD: collabdocs
+      POSTGRES_DB: collabdocs
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/docker/create-test-database.sql:/docker-entrypoint-initdb.d/10-create-test-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collabdocs -d collabdocs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    # No persistence: Redis holds counters and relay messages that can be rebuilt.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
