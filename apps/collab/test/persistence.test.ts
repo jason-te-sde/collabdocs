@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CollabServer } from "../src/index";
 import * as Y from "yjs";
 import {
   TestClient,
@@ -185,5 +186,53 @@ describe("persistence", () => {
     );
     await server.close();
     expect(await storedText(f.documentId)).toBe("z".repeat(40));
+  });
+});
+
+/** Makes the first `failures` compactions of this server fail. Returns the number of calls so far. */
+function failCompactions(server: CollabServer, failures: number): () => number {
+  const real = server.store.compact.bind(server.store);
+  let calls = 0;
+  server.store.compact = (documentId) =>
+    ++calls <= failures ? Promise.reject(new Error("database busy")) : real(documentId);
+  return () => calls;
+}
+
+describe("a failed compaction", () => {
+  it("is retried until it succeeds, without further updates", async () => {
+    const server = await launch({ persistence: { compactEveryUpdates: 3, compactAfterMs: 100 } });
+    const calls = failCompactions(server, 2);
+    const f = await createDocument();
+    const a = await TestClient.connect(server, f, "owner", "owner");
+    for (let i = 0; i < 3; i += 1) a.append(String(i));
+    await waitFor(async () => (await snapshotRows(f.documentId)).length === 1, "a snapshot", 5000);
+    expect(calls()).toBe(3);
+    expect(server.logs.find("compaction failed")).toHaveLength(2);
+    expect(await updateRows(f.documentId)).toHaveLength(0);
+    expect(await storedText(f.documentId)).toBe("012");
+    // Compacted and idle: nothing is left to compact at close.
+    a.close();
+    await server.close();
+    expect(calls()).toBe(3);
+  });
+
+  it("is tried again when the document is closed", async () => {
+    const server = await launch({
+      persistence: { compactEveryUpdates: 2, compactAfterMs: 600_000 },
+    });
+    const calls = failCompactions(server, 1);
+    const f = await createDocument();
+    const a = await TestClient.connect(server, f, "owner", "owner");
+    a.append("a");
+    a.append("b");
+    await waitFor(() => calls() === 1, "the failing compaction");
+    await settle(100);
+    expect(await snapshotRows(f.documentId)).toHaveLength(0);
+    a.close();
+    await server.close();
+    expect(calls()).toBe(2);
+    expect(await snapshotRows(f.documentId)).toHaveLength(1);
+    expect(await updateRows(f.documentId)).toHaveLength(0);
+    expect(await storedText(f.documentId)).toBe("ab");
   });
 });

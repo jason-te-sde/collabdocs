@@ -590,18 +590,27 @@ export class DocumentEntry {
     void this.compact();
   }
 
-  /** Compacts in the database. One at a time per entry; the store serialises across instances. */
+  /**
+   * Compacts in the database. One at a time per entry; the store serialises across
+   * instances. The count of uncompacted updates drops only when the compaction
+   * has succeeded: a failed one leaves it as it was, is retried after
+   * `compactAfterMs`, and is tried once more when the entry closes.
+   */
   private compact(): Promise<void> {
     if (this.compacting) return this.compacting;
-    this.uncompacted = 0;
+    const covered = this.uncompacted;
     this.compacting = (async () => {
       try {
         const result = await this.deps.store.compact(this.id);
+        this.uncompacted = Math.max(0, this.uncompacted - covered);
         if (result) {
           this.deps.logger.info("document compacted", { documentId: this.id, ...result });
         }
+        // A smaller snapshot gives a document that hit its size cap room again.
+        this.storedBytes = await this.deps.store.storedBytes(this.id).catch(() => this.storedBytes);
       } catch (error) {
         this.deps.logger.error("compaction failed", { documentId: this.id, ...errorFields(error) });
+        this.armCompactTimer();
       } finally {
         this.compacting = null;
       }
