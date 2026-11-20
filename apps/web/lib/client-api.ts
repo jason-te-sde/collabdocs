@@ -67,13 +67,39 @@ export const renameDocument = (id: string, title: string) =>
     body: { title },
   });
 
-export const listMembers = (id: string) =>
-  api<{ memberships: Member[] }>(`/api/documents/${encodeURIComponent(id)}/memberships`);
+export interface Invitation {
+  id: string;
+  email: string;
+  role: Role;
+}
 
+export const listMembers = (id: string) =>
+  api<{ memberships: Member[]; invitations: Invitation[] }>(
+    `/api/documents/${encodeURIComponent(id)}/memberships`,
+  );
+
+/** Either the new membership, or, for an address that is not verified yet, a pending invitation. */
 export const inviteMember = (id: string, email: string, role: AssignableRole) =>
-  api<{ membership: Member }>(`/api/documents/${encodeURIComponent(id)}/memberships`, {
+  api<{ membership?: Member; invitation?: Invitation }>(
+    `/api/documents/${encodeURIComponent(id)}/memberships`,
+    { method: "POST", body: { email, role } },
+  );
+
+export const cancelInvitation = (id: string, inviteId: string) =>
+  api(`/api/documents/${encodeURIComponent(id)}/invitations/${encodeURIComponent(inviteId)}`, {
+    method: "DELETE",
+  });
+
+export const confirmEmail = (token: string) =>
+  api<{ verified: true; email: string }>("/api/verify-email", {
     method: "POST",
-    body: { email, role },
+    body: { token },
+  });
+
+export const resendVerification = () =>
+  api<{ sent?: boolean; alreadyVerified?: boolean }>("/api/verify-email/resend", {
+    method: "POST",
+    body: {},
   });
 
 export const changeMemberRole = (id: string, userId: string, role: AssignableRole) =>

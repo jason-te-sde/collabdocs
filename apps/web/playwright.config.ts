@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
 
@@ -12,6 +13,9 @@ import { defineConfig } from "@playwright/test";
  * PW_CHANNEL=chrome runs them in an installed Google Chrome instead of the
  * Chromium that `npx playwright install chromium` downloads.
  */
+/** Where the web app's file mailer writes the verification mails that the tests read. */
+export const MAIL_OUTBOX_DIR = path.join(os.tmpdir(), "collabdocs-e2e-mail");
+
 const WEB_PORT = 3100;
 const COLLAB_PORT = 4100;
 export const WEB_URL = `http://localhost:${WEB_PORT}`;
@@ -31,6 +35,14 @@ const env = {
   COLLAB_URL: `http://localhost:${COLLAB_PORT}`,
   COLLAB_PORT: String(COLLAB_PORT),
   COLLAB_CORS_ORIGIN: WEB_URL,
+  MAIL_TRANSPORT: "file",
+  MAIL_OUTBOX_DIR,
+  // Every test registers and signs in from one address, which the defaults would stop.
+  AUTH_LIMIT_SIGNIN_PER_IP: "100000",
+  AUTH_LIMIT_SIGNIN_PER_ACCOUNT: "100000",
+  AUTH_LIMIT_REGISTER_PER_IP: "100000",
+  AUTH_LIMIT_REGISTER_PER_ACCOUNT: "100000",
+  AUTH_LIMIT_VERIFY_RESEND_PER_ACCOUNT: "100000",
   // A removed member must lose access within the test's patience even if the Redis message were lost.
   COLLAB_MEMBERSHIP_RECHECK_MS: "5000",
 };

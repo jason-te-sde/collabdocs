@@ -31,6 +31,7 @@ model User {
   sessions      Session[]
   memberships   Membership[]
   ownedDocuments Document[]
+  invitesSent   PendingInvite[]
 }
 
 model Account {
@@ -81,6 +82,7 @@ model Document {
 
   owner       User               @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   memberships Membership[]
+  pendingInvites PendingInvite[]
   snapshots   DocumentSnapshot[]
   updates     DocumentUpdate[]
 
@@ -99,6 +101,24 @@ model Membership {
 
   @@unique([documentId, userId])
   @@index([userId])
+}
+
+/// An invitation to an address whose account has not verified it. It grants nothing until
+/// the account verifies that address, which turns it into a Membership. The database
+/// keeps the email lower-case and refuses the owner role.
+model PendingInvite {
+  id          String   @id @default(cuid())
+  documentId  String
+  email       String
+  role        Role
+  invitedById String
+  createdAt   DateTime @default(now())
+
+  document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  invitedBy User     @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, email])
+  @@index([email])
 }
 
 model DocumentSnapshot {

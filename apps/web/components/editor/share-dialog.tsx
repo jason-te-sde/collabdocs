@@ -12,10 +12,12 @@ import { useCallback, useState, type FormEvent } from "react";
 import { Button, ErrorText, inputClass } from "@/components/ui";
 import {
   ApiError,
+  cancelInvitation,
   changeMemberRole,
   inviteMember,
   listMembers,
   removeMember,
+  type Invitation,
   type Member,
 } from "@/lib/client-api";
 
@@ -65,6 +67,8 @@ function RoleSelect({
 export function ShareDialog({ documentId, role }: { documentId: string; role: Role }) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<Member[] | null>(null);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<AssignableRole>("editor");
@@ -72,7 +76,9 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
 
   const load = useCallback(async () => {
     try {
-      setMembers((await listMembers(documentId)).memberships);
+      const listed = await listMembers(documentId);
+      setMembers(listed.memberships);
+      setInvitations(listed.invitations);
     } catch (caught) {
       setError(message(caught));
     }
@@ -81,6 +87,7 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
   async function run(action: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       await action();
       await load();
@@ -94,7 +101,12 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
   function onInvite(event: FormEvent) {
     event.preventDefault();
     void run(async () => {
-      await inviteMember(documentId, email, inviteRole);
+      const result = await inviteMember(documentId, email, inviteRole);
+      if (result.invitation) {
+        setNotice(
+          `${result.invitation.email} has not confirmed their email address yet. They get access when they do.`,
+        );
+      }
       setEmail("");
     });
   }
@@ -108,6 +120,7 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
       onOpenChange={(next) => {
         setOpen(next);
         if (next) {
+          setNotice(null);
           setError(null);
           void load();
         }
@@ -164,6 +177,11 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
               <ErrorText>{error}</ErrorText>
             </div>
           ) : null}
+          {notice ? (
+            <p role="status" className="mt-3 text-sm text-slate-800">
+              {notice}
+            </p>
+          ) : null}
 
           <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-slate-700">
             People with access
@@ -210,6 +228,36 @@ export function ShareDialog({ documentId, role }: { documentId: string; role: Ro
               })}
             </ul>
           )}
+
+          {invitations.length > 0 ? (
+            <>
+              <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-slate-700">
+                Waiting for email confirmation
+              </h3>
+              <ul aria-label="Pending invitations" className="mt-2 divide-y divide-slate-200">
+                {invitations.map((invitation) => (
+                  <li key={invitation.id} className="flex items-center justify-between gap-3 py-2">
+                    <span className="min-w-0 truncate text-sm">{invitation.email}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-sm text-slate-800">{ROLE_LABEL[invitation.role]}</span>
+                      {canManage ? (
+                        <Button
+                          variant="danger"
+                          disabled={busy}
+                          aria-label={`Withdraw the invitation for ${invitation.email}`}
+                          onClick={() =>
+                            void run(() => cancelInvitation(documentId, invitation.id))
+                          }
+                        >
+                          Withdraw
+                        </Button>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
 
           <div className="mt-6 flex justify-end">
             <Dialog.Close asChild>

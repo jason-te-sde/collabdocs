@@ -10,6 +10,7 @@ import {
   share,
   status,
   type,
+  verificationToken,
 } from "./helpers";
 
 test("a removed member is disconnected, loses the page and the local copy", async ({ browser }) => {
@@ -126,6 +127,41 @@ test("sign up, create, rename and share a document through the pages", async ({ 
   await signup.waitForURL("**/documents");
   await expect(signup.getByRole("heading", { level: 1, name: "Documents" })).toBeVisible();
   await newcomer.close();
+  await owner.context.close();
+  await guest.context.close();
+});
+
+test("an invitation to an unconfirmed address waits until the address is confirmed", async ({
+  browser,
+}) => {
+  const owner = await newPerson(browser, "Olive");
+  const guest = await newPerson(browser, "Gwen", { verified: false });
+  const id = await createDocument(owner, "Held back");
+
+  await owner.page.goto(`/documents/${id}`);
+  await owner.page.getByRole("button", { name: "Share" }).click();
+  await owner.page.getByLabel("Email").fill(guest.email);
+  await owner.page.getByRole("button", { name: "Invite" }).click();
+  await expect(owner.page.getByText("has not confirmed their email address yet")).toBeVisible();
+  await expect(
+    owner.page.getByRole("list", { name: "Pending invitations" }).getByText(guest.email),
+  ).toBeVisible();
+
+  // The guest is signed in, is told to confirm, and has no access yet.
+  await guest.page.goto("/documents");
+  await expect(guest.page.getByText("Confirm your email address")).toBeVisible();
+  await guest.page.goto(`/documents/${id}`);
+  await expect(
+    guest.page.getByRole("heading", { name: "You do not have access to this document" }),
+  ).toBeVisible();
+
+  // The link in the mail opens a page whose button confirms the address.
+  await guest.page.goto(`/verify-email?token=${await verificationToken(guest.email)}`);
+  await guest.page.getByRole("button", { name: "Confirm email address" }).click();
+  await expect(guest.page.getByText("Your email address is confirmed")).toBeVisible();
+
+  await openDocument(guest.page, id);
+  await expect(guest.page.getByText("Confirm your email address")).toHaveCount(0);
   await owner.context.close();
   await guest.context.close();
 });

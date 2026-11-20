@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { signOutAction } from "@/app/actions";
 import { Button } from "@/components/ui";
+import { VerificationBanner } from "@/components/verify-email";
 import { requirePageUser } from "@/lib/session";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
@@ -27,6 +28,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </nav>
       </header>
+      {user.emailVerified ? null : <VerificationBanner email={user.email} />}
       <main id="main" className="mx-auto max-w-5xl px-4 py-8">
         {children}
       </main>

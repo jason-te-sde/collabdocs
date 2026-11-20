@@ -1,7 +1,10 @@
 "use server";
 
 import { AuthError } from "next-auth";
+import { headers } from "next/headers";
 import { signIn, signOut } from "@/auth";
+import { HttpError } from "@/lib/api";
+import { clientIp, enforceSignInLimit } from "@/lib/rate-limit";
 
 export interface SignInState {
   error: string | null;
@@ -12,9 +15,16 @@ export async function signInAction(
   _previous: SignInState,
   formData: FormData,
 ): Promise<SignInState> {
+  const email = String(formData.get("email") ?? "");
+  try {
+    await enforceSignInLimit(clientIp(await headers()), email);
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 429) return { error: error.message };
+    throw error;
+  }
   try {
     await signIn("credentials", {
-      email: String(formData.get("email") ?? ""),
+      email,
       password: String(formData.get("password") ?? ""),
       redirectTo: "/documents",
     });

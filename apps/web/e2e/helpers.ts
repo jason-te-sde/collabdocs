@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 
 export const WEB_URL = "http://localhost:3100";
+/** The directory that playwright.config.ts gives the web app's file mailer. */
+const MAIL_OUTBOX_DIR = path.join(os.tmpdir(), "collabdocs-e2e-mail");
 export const PASSWORD = "a long passphrase for tests";
 
 export interface Person {
@@ -11,8 +16,38 @@ export interface Person {
   page: Page;
 }
 
-/** Registers a user through the API and signs in through the sign-in form, in a fresh browser context. */
-export async function newPerson(browser: Browser, name: string): Promise<Person> {
+/** The token in the newest verification mail to this address. */
+export async function verificationToken(email: string): Promise<string> {
+  const names = (await readdir(MAIL_OUTBOX_DIR).catch(() => [])).sort().reverse();
+  for (const name of names) {
+    const mail = JSON.parse(await readFile(path.join(MAIL_OUTBOX_DIR, name), "utf8")) as {
+      to: string;
+      text: string;
+    };
+    const token = mail.to === email ? /verify-email\?token=([\w-]+)/.exec(mail.text)?.[1] : null;
+    if (token) return token;
+  }
+  throw new Error(`no verification mail to ${email}`);
+}
+
+/** Confirms the address the way the emailed link's page does. */
+export async function verifyEmail(page: Page, email: string): Promise<void> {
+  const response = await page.request.post("/api/verify-email", {
+    data: { token: await verificationToken(email) },
+  });
+  expect(response.status()).toBe(200);
+}
+
+/**
+ * Registers a user through the API, confirms the address from the mail the app sent,
+ * and signs in through the sign-in form, in a fresh browser context. Pass
+ * `verified: false` to leave the address unconfirmed.
+ */
+export async function newPerson(
+  browser: Browser,
+  name: string,
+  { verified = true }: { verified?: boolean } = {},
+): Promise<Person> {
   const email = `${name.toLowerCase()}-${randomUUID().slice(0, 8)}@example.test`;
   const context = await browser.newContext({ baseURL: WEB_URL });
   const page = await context.newPage();
@@ -20,6 +55,7 @@ export async function newPerson(browser: Browser, name: string): Promise<Person>
     data: { email, password: PASSWORD, name },
   });
   expect(registered.status()).toBe(201);
+  if (verified) await verifyEmail(page, email);
   await signIn(page, email);
   return { name, email, context, page };
 }

@@ -6,13 +6,17 @@ export interface PageUser {
   id: string;
   email: string;
   name: string | null;
+  emailVerified: Date | null;
 }
 
 /** The signed-in user for a page, or null. The user is looked up again, as `requireUser` does for routes. */
 export async function getPageUser(): Promise<PageUser | null> {
   const id = (await auth())?.user?.id;
   if (!id) return null;
-  return getDb().user.findUnique({ where: { id }, select: { id: true, email: true, name: true } });
+  return getDb().user.findUnique({
+    where: { id },
+    select: { id: true, email: true, name: true, emailVerified: true },
+  });
 }
 
 export async function requirePageUser(): Promise<PageUser> {

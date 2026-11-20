@@ -8,6 +8,7 @@ export class HttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
     this.name = "HttpError";
@@ -38,7 +39,13 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
       return await fn(...args);
     } catch (error) {
       if (error instanceof HttpError) {
-        return json({ error: { code: error.code, message: error.message } }, error.status);
+        const response = json(
+          { error: { code: error.code, message: error.message } },
+          error.status,
+        );
+        for (const [name, value] of Object.entries(error.headers))
+          response.headers.set(name, value);
+        return response;
       }
       // Prisma's "record to update or delete not found": the row went away between
       // the permission check and the write, which is a 404 and not a server error.

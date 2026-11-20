@@ -1,20 +1,9 @@
 import { MEMBERSHIP_CHANNEL, type MembershipChange } from "@collabdocs/shared";
 import { MIN_REDIS_SECRET_BYTES, sealMembershipChange } from "@collabdocs/shared/redis-auth";
-import { Redis } from "ioredis";
+import { getRedis } from "@/lib/redis";
 
-const globalForRedis = globalThis as unknown as { collabdocsRedis?: Redis };
 let warned = false;
 let warnedSecret = false;
-
-function publisher(url: string): Redis {
-  if (!globalForRedis.collabdocsRedis) {
-    const client = new Redis(url, { maxRetriesPerRequest: 1, commandTimeout: 2000 });
-    // A Redis outage must not crash the web app; the publish below reports it per call.
-    client.on("error", () => {});
-    globalForRedis.collabdocsRedis = client;
-  }
-  return globalForRedis.collabdocsRedis;
-}
 
 /**
  * Tells the collab servers that a member's access changed, so they disconnect that
@@ -25,8 +14,8 @@ function publisher(url: string): Redis {
  * timer, so a lost message delays the disconnect by at most that interval.
  */
 export async function publishMembershipChange(change: MembershipChange): Promise<void> {
-  const url = process.env.REDIS_URL;
-  if (!url) {
+  const redis = getRedis();
+  if (!redis) {
     if (!warned) {
       warned = true;
       console.warn("REDIS_URL is not set; collab servers are not told about membership changes");
@@ -45,7 +34,7 @@ export async function publishMembershipChange(change: MembershipChange): Promise
     return;
   }
   try {
-    await publisher(url).publish(MEMBERSHIP_CHANNEL, sealMembershipChange(change, secret));
+    await redis.publish(MEMBERSHIP_CHANNEL, sealMembershipChange(change, secret));
   } catch (error) {
     console.error("could not publish a membership change", error);
   }
