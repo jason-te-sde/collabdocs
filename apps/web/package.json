@@ -20,9 +20,10 @@
   "dependencies": {
     "@auth/prisma-adapter": "2.11.3",
     "@collabdocs/shared": "*",
+    "@node-rs/argon2": "2.2.2",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
-    "@node-rs/argon2": "2.2.2",
+    "ioredis": "5.11.1",
     "next": "16.4.6",
     "next-auth": "5.0.0-beta.32",
     "pg": "8.23.1",
