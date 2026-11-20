@@ -130,3 +130,58 @@ describe("database invariants", () => {
     }
   });
 });
+
+// `db:drift` compares the migrations with schema.prisma, and Prisma cannot express these
+// objects, so a migration that dropped one would pass it. Read the catalog instead.
+describe("the schema objects that Prisma cannot express exist", () => {
+  const rows = <T>(query: string) => getDb().$queryRawUnsafe<T[]>(query);
+
+  it("has the triggers, enabled, on the right tables and events", async () => {
+    const triggers = await rows<{ name: string; enabled: string; def: string }>(
+      `SELECT tgname AS name, tgenabled::text AS enabled, pg_get_triggerdef(oid) AS def
+         FROM pg_trigger WHERE NOT tgisinternal`,
+    );
+    const byName = new Map(triggers.map((t) => [t.name, t]));
+    const expected: Array<[string, RegExp]> = [
+      // One owner per document, and the owner membership cannot be changed or removed.
+      [
+        "Membership_owner_guard",
+        /BEFORE INSERT OR DELETE OR UPDATE ON public\."Membership" FOR EACH ROW/,
+      ],
+      // Every document has its owner membership by the end of its transaction.
+      [
+        "Document_requires_owner_membership",
+        /CONSTRAINT TRIGGER.* AFTER INSERT ON public\."Document" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW/,
+      ],
+      ["Document_owner_immutable", /BEFORE UPDATE ON public\."Document" FOR EACH ROW/],
+      ["DocumentUpdate_append_only", /BEFORE UPDATE ON public\."DocumentUpdate" FOR EACH ROW/],
+    ];
+    for (const [name, definition] of expected) {
+      const trigger = byName.get(name);
+      expect(trigger, `trigger ${name}`).toBeDefined();
+      expect(trigger!.enabled, `trigger ${name} is enabled`).toBe("O");
+      expect(trigger!.def).toMatch(definition);
+    }
+  });
+
+  it("has the partial unique index that allows one owner per document", async () => {
+    const [index] = await rows<{ def: string }>(
+      `SELECT indexdef AS def FROM pg_indexes WHERE indexname = 'Membership_one_owner_per_document'`,
+    );
+    expect(index, "index Membership_one_owner_per_document").toBeDefined();
+    expect(index!.def).toMatch(/CREATE UNIQUE INDEX/);
+    expect(index!.def).toMatch(/\("documentId"\)/);
+    expect(index!.def).toMatch(/WHERE \(role = 'owner'::"Role"\)/);
+  });
+
+  it("has the CHECK constraints, including the title length", async () => {
+    const checks = await rows<{ name: string; def: string }>(
+      `SELECT conname AS name, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE contype = 'c'`,
+    );
+    const byName = new Map(checks.map((c) => [c.name, c.def]));
+    expect(byName.get("Document_title_length")).toMatch(/char_length\(title\).*1.*200/);
+    expect(byName.get("User_email_lowercase")).toMatch(/lower/);
+    expect(byName.get("DocumentUpdate_seq_positive")).toMatch(/seq.*>= 1/);
+    expect(byName.get("DocumentSnapshot_version_positive")).toMatch(/version.*>= 1/);
+  });
+});
