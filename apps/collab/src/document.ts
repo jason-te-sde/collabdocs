@@ -307,10 +307,13 @@ export class DocumentEntry {
         // The role in the token and at connect time may be out of date: a removal or a
         // demotion takes effect on the next write, not at the next re-check.
         if (!(await this.confirmRole(socket)) || this.state !== "ready") return;
+        // A revocation may have arrived while the role was being read.
+        if (!socket.connected) return;
         try {
           const update = decoding.readVarUint8Array(decoder);
-          if (!this.admit(socket, event, update.byteLength)) return;
+          if (!this.admit(socket, event, update)) return;
           Y.applyUpdate(this.doc, update, socket.data.origin);
+          if (!this.withinPendingStructCap(socket, event)) return;
         } catch (error) {
           this.reject(socket, event, "malformed", errorFields(error).detail as string);
         }
@@ -322,20 +325,70 @@ export class DocumentEntry {
   }
 
   /**
-   * Decides whether an update of `size` bytes may be applied. Two bounds protect the
-   * database and this process: the document's total size, and the updates waiting
-   * to be written. The check runs before the update touches the Y.Doc, so a refusal
-   * leaves the state as it was.
+   * Bytes of Yjs structure the document holds back because the updates they depend on
+   * have not arrived (`pendingStructs` and `pendingDs`). Such an update fires no
+   * `update` event and is never written, but it stays in memory, so it counts.
    */
-  private admit(socket: CollabSocket, event: string, size: number): boolean {
-    const { maxDocumentBytes, maxPendingBytes } = this.deps.limits;
-    if (this.storedBytes + this.pendingBytes + size > maxDocumentBytes) {
-      // A compaction may shrink what is stored, so try one before the next write.
-      if (this.uncompacted > 0) this.compactSoon();
-      this.reject(socket, event, "document_full", `${this.storedBytes + this.pendingBytes} bytes`);
+  private unresolvedBytes(): number {
+    const store = this.doc.store;
+    return (store.pendingStructs?.update.byteLength ?? 0) + (store.pendingDs?.byteLength ?? 0);
+  }
+
+  /**
+   * After an update was applied: the unresolved structure of the document must stay
+   * under its cap. Past it the held structure is dropped (a client that is honest
+   * sends it again after it reconnects and syncs), the socket is told why and closed.
+   */
+  private withinPendingStructCap(socket: CollabSocket, event: string): boolean {
+    const held = this.unresolvedBytes();
+    if (held <= this.deps.limits.maxPendingStructBytes) return true;
+    this.doc.store.pendingStructs = null;
+    this.doc.store.pendingDs = null;
+    this.deps.logger.warn("unresolved updates over the cap; disconnecting", {
+      documentId: this.id,
+      userId: socket.data.userId,
+      heldBytes: held,
+    });
+    socket.emit(COLLAB_EVENTS.rejected, { event, reason: "overloaded" });
+    socket.disconnect(true);
+    return false;
+  }
+
+  /** True when an update contains no new content, only deletions of what exists. */
+  private onlyDeletes(update: Uint8Array): boolean {
+    try {
+      return Y.decodeUpdate(update).structs.length === 0;
+    } catch {
       return false;
     }
-    if (this.pendingBytes + size > maxPendingBytes) {
+  }
+
+  /**
+   * Decides whether an update may be applied. Two bounds protect the database and
+   * this process: the document's total size, and the updates waiting to be written.
+   * Both count what is held back for want of a dependency, as soon as it is received.
+   * The check runs before the update touches the Y.Doc, so a refusal leaves the state
+   * as it was. An update that only deletes passes the size cap: refusing it would
+   * leave a full document no way to become smaller.
+   */
+  private admit(socket: CollabSocket, event: string, update: Uint8Array): boolean {
+    const { maxDocumentBytes, maxPendingBytes } = this.deps.limits;
+    const size = update.byteLength;
+    const held = this.unresolvedBytes();
+    if (this.storedBytes + this.pendingBytes + held + size > maxDocumentBytes) {
+      // A compaction may shrink what is stored, so try one before the next write.
+      if (this.uncompacted > 0) this.compactSoon();
+      if (!this.onlyDeletes(update)) {
+        this.reject(
+          socket,
+          event,
+          "document_full",
+          `${this.storedBytes + this.pendingBytes + held} bytes`,
+        );
+        return false;
+      }
+    }
+    if (this.pendingBytes + held + size > maxPendingBytes) {
       // The database is not keeping up with this socket. Reading from it cannot be
       // paused with Socket.IO, so close it: its client keeps the edit and sends it
       // again after the reconnect.

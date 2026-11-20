@@ -151,3 +151,19 @@ describe("awareness is bound to the user who announced it", () => {
     expect(presenceOf(a, f.documentId, ada.doc.clientID)).toEqual({ name: "Ada" });
   });
 });
+
+describe("awareness messages are bounded in the states they carry", () => {
+  it("refuses a message with more states than the limit as malformed, before looking at ids", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    const client = await TestClient.connect(server, f, "owner", "owner");
+    const entries = Array.from({ length: 17 }, (_, i) => ({ id: 1000 + i, state: { i } }));
+    client.socket.emit("awareness", craft(entries));
+    await waitFor(() => client.rejected.length === 1, "a rejection");
+    expect(client.rejected[0]).toEqual({ event: "awareness", reason: "malformed" });
+    // Within the state limit but over the limit of ids per socket: a different refusal.
+    client.socket.emit("awareness", craft(entries.slice(0, 9)));
+    await waitFor(() => client.rejected.length === 2, "a second rejection");
+    expect(client.rejected[1]).toEqual({ event: "awareness", reason: "forbidden" });
+  });
+});
