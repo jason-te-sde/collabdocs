@@ -28,6 +28,7 @@ describe("configuration", () => {
       unloadGraceMs: 30_000,
       reconcileIntervalMs: 5_000,
       membershipRecheckMs: 60_000,
+      roleCacheMs: 1_000,
     });
   });
 
@@ -51,6 +52,7 @@ describe("configuration", () => {
       COLLAB_UNLOAD_GRACE_MS: "16",
       COLLAB_RECONCILE_INTERVAL_MS: "17",
       COLLAB_MEMBERSHIP_RECHECK_MS: "18",
+      COLLAB_ROLE_CACHE_MS: "19",
     });
     expect(options).toMatchObject({
       port: 5000,
@@ -73,6 +75,7 @@ describe("configuration", () => {
         unloadGraceMs: 16,
         reconcileIntervalMs: 17,
         membershipRecheckMs: 18,
+        roleCacheMs: 19,
       },
     });
   });

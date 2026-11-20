@@ -4,6 +4,7 @@ import {
   type RejectReason,
   type RevokedNotice,
   type MembershipChange,
+  type Role,
 } from "@collabdocs/shared";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
@@ -43,6 +44,9 @@ function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   return null;
 }
+
+/** Consecutive failed membership re-checks after which the document's sockets are closed. */
+const RECHECK_FAILURES_BEFORE_DISCONNECT = 3;
 
 /** The most awareness ids (browser tabs, in practice) one socket may announce. */
 const MAX_AWARENESS_IDS_PER_SOCKET = 8;
@@ -112,6 +116,7 @@ export class DocumentEntry {
   private reconcileTimer: NodeJS.Timeout | null = null;
   private recheckTimer: NodeJS.Timeout | null = null;
   private cursor = -1;
+  private recheckFailures = 0;
   /** Which user each awareness client id belongs to; a socket may only touch its own user's ids. */
   private readonly awarenessOwners = new Map<number, string>();
 
@@ -198,18 +203,56 @@ export class DocumentEntry {
 
   /** Disconnects this instance's sockets of one user (or all of them) after a membership change. */
   revoke(change: MembershipChange): void {
-    const notice: RevokedNotice = { reason: change.change };
     for (const socket of [...this.sockets]) {
       if (change.userId === null || socket.data.userId === change.userId) {
-        this.deps.logger.info("socket revoked", {
-          documentId: this.id,
-          userId: socket.data.userId,
-          reason: change.change,
-        });
-        socket.emit(COLLAB_EVENTS.revoked, notice);
-        socket.disconnect(true);
+        this.revokeSocket(socket, change.change);
       }
     }
+  }
+
+  private revokeSocket(socket: CollabSocket, reason: RevokedNotice["reason"]): void {
+    this.deps.logger.info("socket revoked", {
+      documentId: this.id,
+      userId: socket.data.userId,
+      reason,
+    });
+    const notice: RevokedNotice = { reason };
+    socket.emit(COLLAB_EVENTS.revoked, notice);
+    socket.disconnect(true);
+  }
+
+  /**
+   * Checks the socket's membership against the database, unless it was checked
+   * within `roleCacheMs`; `force` always checks. A removed or changed membership
+   * closes the socket and returns false, and so does a database that cannot
+   * answer: a socket whose right cannot be confirmed must not write.
+   */
+  async confirmRole(socket: CollabSocket, force = false): Promise<boolean> {
+    if (!force && Date.now() - socket.data.roleCheckedAt < this.deps.persistence.roleCacheMs) {
+      return true;
+    }
+    let current: Role | null;
+    try {
+      current = await this.deps.store.role(this.id, socket.data.userId);
+    } catch (error) {
+      this.deps.logger.error("membership check failed; disconnecting", {
+        documentId: this.id,
+        userId: socket.data.userId,
+        ...errorFields(error),
+      });
+      socket.disconnect(true);
+      return false;
+    }
+    socket.data.roleCheckedAt = Date.now();
+    if (current === null) {
+      this.revokeSocket(socket, "removed");
+      return false;
+    }
+    if (current !== socket.data.memberRole) {
+      this.revokeSocket(socket, "role-changed");
+      return false;
+    }
+    return true;
   }
 
   // ---- messages from clients -------------------------------------------
@@ -261,6 +304,9 @@ export class DocumentEntry {
       case syncProtocol.messageYjsUpdate: {
         // A step 2 carries document content, exactly like an update: the same right is needed.
         if (!can(socket.data.role, "write")) return this.reject(socket, event, "forbidden");
+        // The role in the token and at connect time may be out of date: a removal or a
+        // demotion takes effect on the next write, not at the next re-check.
+        if (!(await this.confirmRole(socket)) || this.state !== "ready") return;
         try {
           const update = decoding.readVarUint8Array(decoder);
           if (!this.admit(socket, event, update.byteLength)) return;
@@ -409,6 +455,7 @@ export class DocumentEntry {
     if (this.state !== "ready" || this.sockets.size === 0) return;
     try {
       const roles = await this.deps.store.roles(this.id);
+      this.recheckFailures = 0;
       for (const socket of [...this.sockets]) {
         const current = roles.get(socket.data.userId);
         if (current === undefined) {
@@ -418,10 +465,21 @@ export class DocumentEntry {
         }
       }
     } catch (error) {
+      this.recheckFailures += 1;
       this.deps.logger.warn("membership re-check failed", {
         documentId: this.id,
+        failures: this.recheckFailures,
         ...errorFields(error),
       });
+      // The re-check is the safety net for a lost revocation. If it cannot run, nobody can
+      // vouch for the sockets, so close them; they reconnect through the handshake, which
+      // needs the database too.
+      if (this.recheckFailures >= RECHECK_FAILURES_BEFORE_DISCONNECT) {
+        this.deps.logger.error("memberships cannot be verified; disconnecting the sockets", {
+          documentId: this.id,
+        });
+        for (const socket of [...this.sockets]) socket.disconnect(true);
+      }
     }
   }
 

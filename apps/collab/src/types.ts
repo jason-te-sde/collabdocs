@@ -36,6 +36,8 @@ export interface SocketData {
   role: Role;
   /** The membership role found in the database at connect time. */
   memberRole: Role;
+  /** When the membership was last read from the database for this socket (ms since the epoch). */
+  roleCheckedAt: number;
   origin: ClientOrigin;
 }
 

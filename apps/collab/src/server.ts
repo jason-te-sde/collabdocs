@@ -255,6 +255,7 @@ export async function startCollabServer(
         userId: claims.userId,
         role: weaker(claims.role, memberRole),
         memberRole,
+        roleCheckedAt: Date.now(),
         origin: {
           kind: "client",
           socketId: socket.id,
@@ -277,8 +278,10 @@ export async function startCollabServer(
 
     // Load (or find) the document. Events that arrive meanwhile wait on this promise,
     // so they run in the order they came.
-    const attached = registry.acquire(documentId).then((entry) => {
+    const attached = registry.acquire(documentId).then(async (entry) => {
       if (socket.disconnected) return null;
+      // The membership may have changed while the handshake and the load were running.
+      if (!(await entry.confirmRole(socket, true)) || socket.disconnected) return null;
       entry.attach(socket);
       return entry;
     });

@@ -33,6 +33,8 @@ export interface PersistenceOptions {
   reconcileIntervalMs: number;
   /** How often connected members are checked against the database. */
   membershipRecheckMs: number;
+  /** A socket's role is read again before a write if it was last read longer ago than this. */
+  roleCacheMs: number;
 }
 
 export interface CollabServerOptions {
@@ -77,6 +79,7 @@ export const DEFAULT_PERSISTENCE: PersistenceOptions = {
   unloadGraceMs: 30_000,
   reconcileIntervalMs: 5_000,
   membershipRecheckMs: 60_000,
+  roleCacheMs: 1_000,
 };
 
 type OptionOverrides = Partial<Omit<CollabServerOptions, "limits" | "persistence">> & {
@@ -164,6 +167,7 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
       unloadGraceMs: number(env, "COLLAB_UNLOAD_GRACE_MS"),
       reconcileIntervalMs: number(env, "COLLAB_RECONCILE_INTERVAL_MS"),
       membershipRecheckMs: number(env, "COLLAB_MEMBERSHIP_RECHECK_MS"),
+      roleCacheMs: number(env, "COLLAB_ROLE_CACHE_MS"),
     }),
   });
 }
