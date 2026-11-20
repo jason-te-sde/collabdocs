@@ -14,6 +14,15 @@ describe("relay frame", () => {
       data: new Uint8Array(),
     });
     expect(decodeRelay(awareness)?.kind).toBe("awareness");
+    expect(decodeRelay(awareness)?.userId).toBeUndefined();
+    const owned = encodeRelay({
+      from: "i2",
+      documentId: "d",
+      kind: "awareness",
+      data: new Uint8Array(),
+      userId: "user_1",
+    });
+    expect(decodeRelay(owned)?.userId).toBe("user_1");
   });
 
   it("rejects frames that are not well formed", () => {

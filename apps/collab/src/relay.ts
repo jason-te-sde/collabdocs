@@ -8,6 +8,8 @@ export interface RelayMessage {
   documentId: string;
   kind: RelayKind;
   data: Uint8Array;
+  /** For awareness: the user whose sockets the update came from. Awareness ids belong to a user. */
+  userId?: string;
 }
 
 const KINDS: readonly RelayKind[] = ["update", "awareness"];
@@ -22,6 +24,7 @@ export function encodeRelay(message: RelayMessage): Buffer {
   encoding.writeUint8(encoder, KINDS.indexOf(message.kind));
   encoding.writeVarString(encoder, message.from);
   encoding.writeVarString(encoder, message.documentId);
+  encoding.writeVarString(encoder, message.userId ?? "");
   encoding.writeVarUint8Array(encoder, message.data);
   return Buffer.from(encoding.toUint8Array(encoder));
 }
@@ -34,8 +37,9 @@ export function decodeRelay(frame: Uint8Array): RelayMessage | null {
     if (!kind) return null;
     const from = decoding.readVarString(decoder);
     const documentId = decoding.readVarString(decoder);
+    const userId = decoding.readVarString(decoder);
     const data = decoding.readVarUint8Array(decoder);
-    return { from, documentId, kind, data };
+    return { from, documentId, kind, data, ...(userId ? { userId } : {}) };
   } catch {
     return null;
   }

@@ -23,6 +23,8 @@ export type InterServerEvents = Record<string, never>;
 export interface ClientOrigin {
   kind: "client";
   socketId: string;
+  /** Whose socket it is: awareness ids belong to a user, not to a connection. */
+  userId: string;
   /** Awareness client ids this socket has announced; they are removed when it leaves. */
   awarenessIds: Set<number>;
 }

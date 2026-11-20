@@ -75,7 +75,7 @@ describe("limits", () => {
   });
 
   it("applies the size limit to awareness updates too", async () => {
-    const server = await launch({ limits: { maxUpdateBytes: 2000 } });
+    const server = await launch({ limits: { maxAwarenessBytes: 2000 } });
     const f = await createDocument();
     const a = await TestClient.connect(server, f, "owner", "owner");
     const b = await TestClient.connect(server, f, "editor", "editor");

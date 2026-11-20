@@ -101,7 +101,12 @@ export async function startCollabServer(
   });
 
   const cleanups: Array<() => Promise<void>> = [];
-  let relay = (_documentId: string, _kind: RelayKind, _data: Uint8Array): void => {};
+  let relay = (
+    _documentId: string,
+    _kind: RelayKind,
+    _data: Uint8Array,
+    _userId?: string,
+  ): void => {};
   let counter: ConnectionCounter = new MemoryConnectionCounter(limits.maxConnectionsPerDocument);
 
   if (options.redisUrl) {
@@ -138,7 +143,7 @@ export async function startCollabServer(
           return;
         }
         if (message.from === instanceId) return;
-        registry.applyRemote(message.documentId, message.kind, message.data);
+        registry.applyRemote(message.documentId, message.kind, message.data, message.userId);
       });
       members.on("message", (_channel: string, raw: string) => {
         const change = parseMembershipChange(raw);
@@ -154,9 +159,18 @@ export async function startCollabServer(
         options.redisConnectTimeoutMs,
         "membership subscribe",
       );
-      relay = (documentId, kind, data) => {
+      relay = (documentId, kind, data, userId) => {
         void pub
-          .publish(relayChannel, encodeRelay({ from: instanceId, documentId, kind, data }))
+          .publish(
+            relayChannel,
+            encodeRelay({
+              from: instanceId,
+              documentId,
+              kind,
+              data,
+              ...(userId ? { userId } : {}),
+            }),
+          )
           .catch((error: unknown) =>
             logger.warn("relay publish failed", { documentId, ...errorFields(error) }),
           );
@@ -185,9 +199,9 @@ export async function startCollabServer(
     logger,
     persistence: options.persistence,
     limits,
-    relay: (documentId, kind, data) => {
+    relay: (documentId, kind, data, userId) => {
       try {
-        relay(documentId, kind, data);
+        relay(documentId, kind, data, userId);
       } catch (error) {
         logger.warn("relay failed", { documentId, kind, ...errorFields(error) });
       }
@@ -241,7 +255,12 @@ export async function startCollabServer(
         userId: claims.userId,
         role: weaker(claims.role, memberRole),
         memberRole,
-        origin: { kind: "client", socketId: socket.id, awarenessIds: new Set() },
+        origin: {
+          kind: "client",
+          socketId: socket.id,
+          userId: claims.userId,
+          awarenessIds: new Set(),
+        },
       };
       next();
     } catch (error) {

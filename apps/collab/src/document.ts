@@ -15,11 +15,16 @@ import { errorFields, type Logger } from "./logger";
 import type { DocumentStore } from "./store";
 import type { ClientOrigin, CollabIo, CollabSocket, RelayKind } from "./types";
 
-const REMOTE = { kind: "remote" } as const;
+/** Applied on behalf of another instance. `userId` is set for awareness, whose ids belong to a user. */
+interface RemoteOrigin {
+  kind: "remote";
+  userId?: string | undefined;
+}
+const REMOTE: RemoteOrigin = { kind: "remote" };
 const LOAD = { kind: "load" } as const;
 const DISCONNECT = { kind: "disconnect" } as const;
 
-type AnyOrigin = ClientOrigin | typeof REMOTE | typeof LOAD | typeof DISCONNECT | string | null;
+type AnyOrigin = ClientOrigin | RemoteOrigin | typeof LOAD | typeof DISCONNECT | string | null;
 
 export interface DocumentDeps {
   io: CollabIo;
@@ -28,7 +33,7 @@ export interface DocumentDeps {
   persistence: PersistenceOptions;
   limits: Limits;
   /** Sends a message to the other instances. A no-op when the server runs alone. */
-  relay: (documentId: string, kind: RelayKind, data: Uint8Array) => void;
+  relay: (documentId: string, kind: RelayKind, data: Uint8Array, userId?: string) => void;
   /** Called once when the entry is gone, so the registry can forget it. */
   onGone: (entry: DocumentEntry) => void;
 }
@@ -37,6 +42,29 @@ function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof Uint8Array) return data;
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   return null;
+}
+
+/** The most awareness ids (browser tabs, in practice) one socket may announce. */
+const MAX_AWARENESS_IDS_PER_SOCKET = 8;
+/** The most states one awareness message may carry. */
+const MAX_AWARENESS_ENTRIES = 16;
+
+/** The client ids an awareness update touches, or null if it is not well formed. */
+function awarenessIds(bytes: Uint8Array): number[] | null {
+  try {
+    const decoder = decoding.createDecoder(bytes);
+    const count = decoding.readVarUint(decoder);
+    if (count > MAX_AWARENESS_ENTRIES) return null;
+    const ids: number[] = [];
+    for (let i = 0; i < count; i += 1) {
+      ids.push(decoding.readVarUint(decoder));
+      decoding.readVarUint(decoder); // clock
+      decoding.readVarString(decoder); // state, as JSON
+    }
+    return ids;
+  } catch {
+    return null;
+  }
 }
 
 function encodeSync(write: (encoder: encoding.Encoder) => void): Uint8Array {
@@ -84,6 +112,8 @@ export class DocumentEntry {
   private reconcileTimer: NodeJS.Timeout | null = null;
   private recheckTimer: NodeJS.Timeout | null = null;
   private cursor = -1;
+  /** Which user each awareness client id belongs to; a socket may only touch its own user's ids. */
+  private readonly awarenessOwners = new Map<number, string>();
 
   constructor(
     readonly id: string,
@@ -275,18 +305,44 @@ export class DocumentEntry {
     return true;
   }
 
-  /** An awareness update (cursor, name, colour). Needs `read`: a viewer may show a cursor. */
+  /**
+   * An awareness update (cursor, name, colour). Needs `read`: a viewer may show a
+   * cursor. An awareness id belongs to the user who first announced it: a socket
+   * may set or remove the states of its own user's ids and no others, so nobody
+   * can fake or erase another person's presence.
+   */
   async onAwareness(socket: CollabSocket, payload: unknown): Promise<void> {
     const event = COLLAB_EVENTS.awareness;
     if (this.state !== "ready") return;
     if (!can(socket.data.role, "read")) return this.reject(socket, event, "forbidden");
     const bytes = toBytes(payload);
     if (!bytes) return this.reject(socket, event, "malformed", "payload is not binary");
-    if (bytes.byteLength > this.deps.limits.maxUpdateBytes) {
+    if (bytes.byteLength > this.deps.limits.maxAwarenessBytes) {
       return this.reject(socket, event, "too_large", `${bytes.byteLength} bytes`);
     }
+    const ids = awarenessIds(bytes);
+    if (!ids) return this.reject(socket, event, "malformed", "unreadable awareness update");
+    const { userId, origin } = socket.data;
+    let fresh = 0;
+    for (const id of ids) {
+      const owner = this.awarenessOwners.get(id);
+      if (owner !== undefined && owner !== userId) {
+        return this.reject(socket, event, "forbidden", "client id belongs to another user");
+      }
+      if (!origin.awarenessIds.has(id)) fresh += 1;
+    }
+    if (origin.awarenessIds.size + fresh > MAX_AWARENESS_IDS_PER_SOCKET) {
+      return this.reject(socket, event, "forbidden", "too many client ids");
+    }
+    // The user's earlier socket may still hold these ids (a reconnect that overtook
+    // the old socket's close): they move to this socket, so the old one's close
+    // does not erase them.
+    for (const other of this.sockets) {
+      if (other === socket) continue;
+      for (const id of ids) other.data.origin.awarenessIds.delete(id);
+    }
     try {
-      awarenessProtocol.applyAwarenessUpdate(this.awareness, bytes, socket.data.origin);
+      awarenessProtocol.applyAwarenessUpdate(this.awareness, bytes, origin);
     } catch (error) {
       this.reject(socket, event, "malformed", errorFields(error).detail as string);
     }
@@ -295,13 +351,17 @@ export class DocumentEntry {
   // ---- messages from other instances and from the database ---------------
 
   /** A message another instance relayed. Applied with the REMOTE origin: never persisted here. */
-  applyRemote(kind: RelayKind, data: Uint8Array): void {
+  applyRemote(kind: RelayKind, data: Uint8Array, userId?: string): void {
     void this.ready.then(
       () => {
         if (this.state !== "ready") return;
         try {
           if (kind === "update") Y.applyUpdate(this.doc, data, REMOTE);
-          else awarenessProtocol.applyAwarenessUpdate(this.awareness, data, REMOTE);
+          else
+            awarenessProtocol.applyAwarenessUpdate(this.awareness, data, {
+              kind: "remote",
+              userId,
+            });
         } catch (error) {
           this.deps.logger.warn("relayed message could not be applied", {
             documentId: this.id,
@@ -385,15 +445,25 @@ export class DocumentEntry {
     const changed = [...change.added, ...change.updated, ...change.removed];
     if (changed.length === 0) return;
     const fromClient = typeof origin === "object" && origin !== null && origin.kind === "client";
+    const remoteUser =
+      typeof origin === "object" && origin !== null && origin.kind === "remote"
+        ? origin.userId
+        : undefined;
+    // Who the change is about, for the other instances; read before ownership is updated.
+    const user = fromClient ? origin.userId : (remoteUser ?? this.awarenessOwners.get(changed[0]!));
     if (fromClient) {
-      for (const id of change.added) origin.awarenessIds.add(id);
+      for (const id of [...change.added, ...change.updated]) origin.awarenessIds.add(id);
       for (const id of change.removed) origin.awarenessIds.delete(id);
     }
+    const owner = fromClient ? origin.userId : remoteUser;
+    if (owner)
+      for (const id of [...change.added, ...change.updated]) this.awarenessOwners.set(id, owner);
+    for (const id of change.removed) this.awarenessOwners.delete(id);
     const message = awarenessProtocol.encodeAwarenessUpdate(this.awareness, changed);
     this.emitLocal(COLLAB_EVENTS.awareness, message, fromClient ? origin.socketId : undefined);
     // Presence is relayed when it began here. A timeout of a remote client's state is
     // decided independently on each instance and must not echo back.
-    if (fromClient || origin === DISCONNECT) this.deps.relay(this.id, "awareness", message);
+    if (fromClient || origin === DISCONNECT) this.deps.relay(this.id, "awareness", message, user);
   };
 
   private emitLocal(event: "sync" | "awareness", data: Uint8Array, exceptSocketId?: string): void {
@@ -598,8 +668,8 @@ export class DocumentRegistry {
     this.entries.get(change.documentId)?.revoke(change);
   }
 
-  applyRemote(id: string, kind: RelayKind, data: Uint8Array): void {
-    this.entries.get(id)?.applyRemote(kind, data);
+  applyRemote(id: string, kind: RelayKind, data: Uint8Array, userId?: string): void {
+    this.entries.get(id)?.applyRemote(kind, data, userId);
   }
 
   async closeAll(): Promise<void> {
