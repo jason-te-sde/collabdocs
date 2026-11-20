@@ -39,6 +39,8 @@ export interface CollabServer {
 
 /** Extra bytes a Socket.IO packet adds around the payload (event name, framing). */
 const FRAME_OVERHEAD_BYTES = 1024;
+/** Real collaboration tokens are a few hundred bytes; longer ones are refused unparsed. */
+export const MAX_TOKEN_CHARS = 2048;
 
 /** How long a command to Redis may take before it fails. */
 const REDIS_COMMAND_TIMEOUT_MS = 1500;
@@ -299,6 +301,11 @@ export async function startCollabServer(
         documentId.length > 128
       ) {
         return refuse("invalid_token", "missing token or document id");
+      }
+      // Before any parsing or signature check: unauthenticated input of any size that fits
+      // in the connect packet must not buy decode and HMAC work.
+      if (token.length > MAX_TOKEN_CHARS) {
+        return refuse("invalid_token", "token is too long", { documentId });
       }
       let claims;
       try {

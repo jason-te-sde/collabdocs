@@ -310,6 +310,22 @@ describe("one anonymous client cannot lock out the others behind the same addres
     expect(await handshake(server, { token, documentId: f.documentId })).toBe("connected");
   });
 
+  it("refuses a token over the size cap even when its signature is valid", async () => {
+    const server = await launch();
+    const f = await createDocument();
+    const { signCollabToken } = await import("@collabdocs/shared");
+    const { TOKEN_SECRET } = await import("./support");
+    // Correctly signed, but padded through the subject claim: only the cap can refuse it.
+    const { token } = await signCollabToken({
+      documentId: f.documentId,
+      userId: `${f.users.owner!}${"x".repeat(3000)}`,
+      role: "owner",
+      secret: TOKEN_SECRET,
+    });
+    expect(token.length).toBeGreaterThan(2048);
+    expect(await handshake(server, { token, documentId: f.documentId })).toBe("invalid_token");
+  });
+
   it("still holds the address ceiling for handshakes with valid tokens", async () => {
     const server = await launch({
       limits: { handshakeBurstPerIp: 2, handshakesPerSecondPerIp: 0.01 },
