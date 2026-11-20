@@ -1,0 +1,29 @@
+import { z } from "zod";
+import { handle, HttpError, json, readBody } from "@/lib/api";
+import { getDb, isUniqueViolation } from "@/lib/db";
+import { normalizeEmail } from "@/lib/email";
+import { hashPassword, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@/lib/passwords";
+
+const schema = z.object({
+  email: z.email().max(254),
+  password: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
+  name: z.string().trim().min(1).max(100).optional(),
+});
+
+export const POST = handle(async (request: Request) => {
+  const body = await readBody(request, schema);
+  const email = normalizeEmail(body.email);
+  const passwordHash = await hashPassword(body.password);
+  try {
+    const user = await getDb().user.create({
+      data: { email, name: body.name ?? null, passwordHash },
+      select: { id: true, email: true, name: true },
+    });
+    return json({ user }, 201);
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new HttpError(409, "email_taken", "An account with this email already exists");
+    }
+    throw error;
+  }
+});
