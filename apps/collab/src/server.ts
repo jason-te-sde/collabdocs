@@ -15,7 +15,7 @@ import { Server } from "socket.io";
 import { resolveOptions, type CollabServerOptions } from "./config";
 import { DocumentRegistry } from "./document";
 import { errorFields } from "./logger";
-import { RateLimiter } from "./limits";
+import { RateLimiter, payloadBytes } from "./limits";
 import { decodeRelay, encodeRelay } from "./relay";
 import { DocumentStore } from "./store";
 import type { CollabIo, CollabSocket, RelayKind } from "./types";
@@ -122,7 +122,7 @@ export async function startCollabServer(
     store,
     logger,
     persistence: options.persistence,
-    maxUpdateBytes: limits.maxUpdateBytes,
+    limits,
     relay: (documentId, kind, data) => {
       try {
         relay(documentId, kind, data);
@@ -189,6 +189,7 @@ export async function startCollabServer(
   io.on("connection", (socket: CollabSocket) => {
     const { documentId, userId, role } = socket.data;
     const limiter = new RateLimiter(limits.maxMessagesPerSecond, limits.messageBurst);
+    const byteBudget = new RateLimiter(limits.maxBytesPerSecond, limits.byteBurst);
     logger.info("socket connected", { documentId, userId, role, instance: instanceId });
 
     // Load (or find) the document. Events that arrive meanwhile wait on this promise,
@@ -203,22 +204,34 @@ export async function startCollabServer(
       socket.disconnect(true);
     });
 
+    // One event at a time per socket, in arrival order, even when a handler waits.
+    let tail: Promise<void> = attached.then(
+      () => {},
+      () => {},
+    );
     const onEvent =
       (handle: "onSync" | "onAwareness") =>
       (payload: unknown): void => {
-        // The rate is checked on arrival, before anything is queued, so a flood
+        // Both budgets are checked on arrival, before anything is queued, so a flood
         // while the document loads cannot grow memory.
         if (!limiter.allow()) {
           logger.warn("rate limit exceeded; disconnecting", { documentId, userId });
           socket.disconnect(true);
           return;
         }
-        void attached.then(
-          (entry) => {
-            if (entry && socket.connected) entry[handle](socket, payload);
-          },
-          () => {},
-        );
+        if (!byteBudget.allow(payloadBytes(payload))) {
+          logger.warn("byte budget exceeded; disconnecting", { documentId, userId });
+          socket.disconnect(true);
+          return;
+        }
+        tail = tail.then(async () => {
+          try {
+            const entry = await attached;
+            if (entry && socket.connected) await entry[handle](socket, payload);
+          } catch (error) {
+            logger.error("event failed", { documentId, ...errorFields(error) });
+          }
+        });
       };
     socket.on(COLLAB_EVENTS.sync, onEvent("onSync"));
     socket.on(COLLAB_EVENTS.awareness, onEvent("onAwareness"));

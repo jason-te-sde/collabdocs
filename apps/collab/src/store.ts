@@ -82,6 +82,18 @@ export class DocumentStore {
     return roles;
   }
 
+  /** What the document occupies: the newest snapshot plus the log, in bytes. */
+  async storedBytes(documentId: string): Promise<number> {
+    const { rows } = await this.pool.query<{ bytes: string }>(
+      `SELECT (
+         COALESCE((SELECT SUM(octet_length("data")) FROM "DocumentUpdate" WHERE "documentId" = $1), 0)
+         + COALESCE((SELECT octet_length("state") FROM "DocumentSnapshot" WHERE "documentId" = $1 ORDER BY "version" DESC LIMIT 1), 0)
+       )::text AS bytes`,
+      [documentId],
+    );
+    return Number(rows[0]?.bytes ?? 0);
+  }
+
   /**
    * The state a reader with cursor `afterSeq` is missing. The snapshot and the log
    * come from one database snapshot, so a compaction cannot fall between them.

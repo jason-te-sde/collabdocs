@@ -10,6 +10,16 @@ export interface Limits {
   messageBurst: number;
   /** Sockets that may be connected to one document, across all instances. */
   maxConnectionsPerDocument: number;
+  /** Sustained payload bytes per second one socket may send. */
+  maxBytesPerSecond: number;
+  /** Payload bytes a socket may send in one burst; at least `maxUpdateBytes`. */
+  byteBurst: number;
+  /** The most a document may occupy in the database (snapshot plus log), in bytes. */
+  maxDocumentBytes: number;
+  /** Updates accepted but not yet committed to the log, per document, in bytes. */
+  maxPendingBytes: number;
+  /** The largest accepted awareness update, in bytes. */
+  maxAwarenessBytes: number;
 }
 
 export interface PersistenceOptions {
@@ -50,6 +60,11 @@ export const DEFAULT_LIMITS: Limits = {
   maxMessagesPerSecond: 100,
   messageBurst: 200,
   maxConnectionsPerDocument: 250,
+  maxBytesPerSecond: 256 * 1024,
+  byteBurst: 2 * 1024 * 1024,
+  maxDocumentBytes: 16 * 1024 * 1024,
+  maxPendingBytes: 8 * 1024 * 1024,
+  maxAwarenessBytes: 8 * 1024,
 };
 
 export const DEFAULT_PERSISTENCE: PersistenceOptions = {
@@ -87,6 +102,9 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
   ]) {
     if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`);
   }
+  if (options.limits.byteBurst < options.limits.maxUpdateBytes) {
+    throw new Error("byteBurst must be at least maxUpdateBytes, or the largest update never fits");
+  }
   return options;
 }
 
@@ -122,6 +140,11 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
       maxMessagesPerSecond: number(env, "COLLAB_MAX_MESSAGES_PER_SECOND"),
       messageBurst: number(env, "COLLAB_MESSAGE_BURST"),
       maxConnectionsPerDocument: number(env, "COLLAB_MAX_CONNECTIONS_PER_DOCUMENT"),
+      maxBytesPerSecond: number(env, "COLLAB_MAX_BYTES_PER_SECOND"),
+      byteBurst: number(env, "COLLAB_BYTE_BURST"),
+      maxDocumentBytes: number(env, "COLLAB_MAX_DOCUMENT_BYTES"),
+      maxPendingBytes: number(env, "COLLAB_MAX_PENDING_BYTES"),
+      maxAwarenessBytes: number(env, "COLLAB_MAX_AWARENESS_BYTES"),
     }),
     persistence: defined({
       compactEveryUpdates: number(env, "COLLAB_COMPACT_EVERY_UPDATES"),

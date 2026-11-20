@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CollabServer } from "../src/index";
 import { RateLimiter } from "../src/limits";
 import {
   TestClient,
@@ -113,5 +114,87 @@ describe("limits", () => {
     await settle(150);
     const viewer = await TestClient.connect(server, f, "viewer", "viewer");
     expect(viewer.connected).toBe(true);
+  });
+});
+
+/** Holds every log append of this server until `release` is called. */
+function holdAppends(server: CollabServer): { release: () => void } {
+  const real = server.store.append.bind(server.store);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.store.append = async (documentId, updates) => {
+    await gate;
+    return real(documentId, updates);
+  };
+  return { release };
+}
+
+describe("one editor cannot exhaust the server", () => {
+  it("disconnects a socket that sends more bytes than its budget, however few messages", async () => {
+    const server = await launch({
+      limits: {
+        maxUpdateBytes: 5000,
+        maxBytesPerSecond: 1000,
+        byteBurst: 10_000,
+        maxMessagesPerSecond: 1000,
+        messageBurst: 1000,
+      },
+    });
+    const f = await createDocument();
+    const writer = await TestClient.connect(server, f, "owner", "owner");
+    const other = await TestClient.connect(server, f, "editor", "editor");
+    for (let i = 0; i < 6; i += 1) writer.append("x".repeat(4000));
+    await waitFor(() => !writer.connected, "the writer to be disconnected");
+    expect(server.logs.find("byte budget exceeded; disconnecting")).toHaveLength(1);
+    await settle(200);
+    expect(other.connected).toBe(true);
+    // Whatever fitted in the budget is stored; the rest never reached the log.
+    expect((await updateRows(f.documentId)).length).toBeLessThan(6);
+  });
+
+  it("refuses writes past the document's size cap and keeps serving reads", async () => {
+    const server = await launch({ limits: { maxDocumentBytes: 5000 } });
+    const f = await createDocument();
+    const writer = await TestClient.connect(server, f, "owner", "owner");
+    const reader = await TestClient.connect(server, f, "viewer", "viewer");
+    for (let i = 0; i < 3; i += 1) writer.append("y".repeat(1500));
+    await waitFor(() => reader.text.length === 4500, "three chunks to arrive");
+    await waitFor(async () => (await updateRows(f.documentId)).length === 3, "three log rows");
+
+    writer.append("z".repeat(1500));
+    await waitFor(() => writer.rejected.length === 1, "a rejection");
+    expect(writer.rejected[0]).toEqual({ event: "sync", reason: "document_full" });
+    await settle(200);
+    expect(reader.text).toHaveLength(4500);
+    const stored = (await updateRows(f.documentId)).reduce((n, r) => n + r.data.length, 0);
+    expect(stored).toBeLessThanOrEqual(5000);
+    expect(writer.connected).toBe(true);
+
+    // A newcomer still reads the document.
+    const late = await TestClient.connect(server, f, "editor", "editor");
+    expect(late.text).toHaveLength(4500);
+  });
+
+  it("bounds the queue of updates waiting for a slow database", async () => {
+    const server = await launch({ limits: { maxUpdateBytes: 2000, maxPendingBytes: 4000 } });
+    const f = await createDocument();
+    const writer = await TestClient.connect(server, f, "owner", "owner");
+    const other = await TestClient.connect(server, f, "editor", "editor");
+    const { release } = holdAppends(server);
+    for (let i = 0; i < 3; i += 1) {
+      writer.append("q".repeat(1500));
+      await settle(60);
+    }
+    await waitFor(() => !writer.connected, "the writer to be disconnected");
+    expect(writer.rejected).toContainEqual({ event: "sync", reason: "overloaded" });
+    expect(server.logs.find("update queue is full; disconnecting")).toHaveLength(1);
+    release();
+    await waitFor(async () => (await updateRows(f.documentId)).length === 2, "the queued rows");
+    await settle(200);
+    // The update that did not fit was never applied, so the other client never saw it.
+    expect(other.text).toHaveLength(3000);
+    expect(await updateRows(f.documentId)).toHaveLength(2);
   });
 });

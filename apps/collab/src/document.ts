@@ -10,7 +10,7 @@ import * as encoding from "lib0/encoding";
 import * as awarenessProtocol from "y-protocols/awareness";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
-import type { PersistenceOptions } from "./config";
+import type { Limits, PersistenceOptions } from "./config";
 import { errorFields, type Logger } from "./logger";
 import type { DocumentStore } from "./store";
 import type { ClientOrigin, CollabIo, CollabSocket, RelayKind } from "./types";
@@ -26,7 +26,7 @@ export interface DocumentDeps {
   store: DocumentStore;
   logger: Logger;
   persistence: PersistenceOptions;
-  maxUpdateBytes: number;
+  limits: Limits;
   /** Sends a message to the other instances. A no-op when the server runs alone. */
   relay: (documentId: string, kind: RelayKind, data: Uint8Array) => void;
   /** Called once when the entry is gone, so the registry can forget it. */
@@ -72,6 +72,10 @@ export class DocumentEntry {
 
   private readonly room: string;
   private pending: Uint8Array[] = [];
+  /** Bytes of updates accepted but not yet committed: the queue plus the batch being written. */
+  private pendingBytes = 0;
+  /** Bytes the document occupies in the database: the last count plus what this entry appended since. */
+  private storedBytes = 0;
   private drainPromise: Promise<void> | null = null;
   private uncompacted = 0;
   private compactTimer: NodeJS.Timeout | null = null;
@@ -104,6 +108,7 @@ export class DocumentEntry {
       for (const row of stored.updates) this.applyStored(row.data, row.seq);
       this.cursor = stored.lastSeq;
       this.uncompacted = stored.updates.length;
+      this.storedBytes = await this.deps.store.storedBytes(this.id);
       this.state = "ready";
       this.startTimers();
       if (this.uncompacted >= this.deps.persistence.compactEveryUpdates) this.compactSoon();
@@ -192,12 +197,12 @@ export class DocumentEntry {
   }
 
   /** A y-protocols sync message. Step 1 needs `read`; step 2 and update need `write`. */
-  onSync(socket: CollabSocket, payload: unknown): void {
+  async onSync(socket: CollabSocket, payload: unknown): Promise<void> {
     const event = COLLAB_EVENTS.sync;
     if (this.state !== "ready") return;
     const bytes = toBytes(payload);
     if (!bytes) return this.reject(socket, event, "malformed", "payload is not binary");
-    if (bytes.byteLength > this.deps.maxUpdateBytes) {
+    if (bytes.byteLength > this.deps.limits.maxUpdateBytes) {
       return this.reject(socket, event, "too_large", `${bytes.byteLength} bytes`);
     }
     let decoder: decoding.Decoder;
@@ -228,6 +233,7 @@ export class DocumentEntry {
         if (!can(socket.data.role, "write")) return this.reject(socket, event, "forbidden");
         try {
           const update = decoding.readVarUint8Array(decoder);
+          if (!this.admit(socket, event, update.byteLength)) return;
           Y.applyUpdate(this.doc, update, socket.data.origin);
         } catch (error) {
           this.reject(socket, event, "malformed", errorFields(error).detail as string);
@@ -239,14 +245,44 @@ export class DocumentEntry {
     }
   }
 
+  /**
+   * Decides whether an update of `size` bytes may be applied. Two bounds protect the
+   * database and this process: the document's total size, and the updates waiting
+   * to be written. The check runs before the update touches the Y.Doc, so a refusal
+   * leaves the state as it was.
+   */
+  private admit(socket: CollabSocket, event: string, size: number): boolean {
+    const { maxDocumentBytes, maxPendingBytes } = this.deps.limits;
+    if (this.storedBytes + this.pendingBytes + size > maxDocumentBytes) {
+      // A compaction may shrink what is stored, so try one before the next write.
+      if (this.uncompacted > 0) this.compactSoon();
+      this.reject(socket, event, "document_full", `${this.storedBytes + this.pendingBytes} bytes`);
+      return false;
+    }
+    if (this.pendingBytes + size > maxPendingBytes) {
+      // The database is not keeping up with this socket. Reading from it cannot be
+      // paused with Socket.IO, so close it: its client keeps the edit and sends it
+      // again after the reconnect.
+      this.deps.logger.warn("update queue is full; disconnecting", {
+        documentId: this.id,
+        userId: socket.data.userId,
+        pendingBytes: this.pendingBytes,
+      });
+      socket.emit(COLLAB_EVENTS.rejected, { event, reason: "overloaded" });
+      socket.disconnect(true);
+      return false;
+    }
+    return true;
+  }
+
   /** An awareness update (cursor, name, colour). Needs `read`: a viewer may show a cursor. */
-  onAwareness(socket: CollabSocket, payload: unknown): void {
+  async onAwareness(socket: CollabSocket, payload: unknown): Promise<void> {
     const event = COLLAB_EVENTS.awareness;
     if (this.state !== "ready") return;
     if (!can(socket.data.role, "read")) return this.reject(socket, event, "forbidden");
     const bytes = toBytes(payload);
     if (!bytes) return this.reject(socket, event, "malformed", "payload is not binary");
-    if (bytes.byteLength > this.deps.maxUpdateBytes) {
+    if (bytes.byteLength > this.deps.limits.maxUpdateBytes) {
       return this.reject(socket, event, "too_large", `${bytes.byteLength} bytes`);
     }
     try {
@@ -301,6 +337,8 @@ export class DocumentEntry {
         }
       }
       this.cursor = stored.lastSeq;
+      // Other instances append too; this is how their bytes count against the cap.
+      this.storedBytes = await this.deps.store.storedBytes(this.id);
     } catch (error) {
       this.deps.logger.warn("reconcile failed", { documentId: this.id, ...errorFields(error) });
     }
@@ -368,6 +406,7 @@ export class DocumentEntry {
 
   private enqueue(update: Uint8Array): void {
     this.pending.push(update);
+    this.pendingBytes += update.byteLength;
     this.kick();
   }
 
@@ -378,6 +417,7 @@ export class DocumentEntry {
       try {
         while (this.pending.length > 0 && this.state !== "gone") {
           const batch = this.pending;
+          const batchBytes = batch.reduce((sum, update) => sum + update.byteLength, 0);
           this.pending = [];
           try {
             await this.deps.store.append(this.id, batch);
@@ -385,6 +425,8 @@ export class DocumentEntry {
             this.fail(error);
             return;
           }
+          this.pendingBytes -= batchBytes;
+          this.storedBytes += batchBytes;
           this.deps.relay(
             this.id,
             "update",
@@ -508,6 +550,7 @@ export class DocumentEntry {
     this.state = "gone";
     this.clearTimers();
     this.pending = [];
+    this.pendingBytes = 0;
     this.awareness.destroy();
     this.doc.destroy();
     this.deps.onGone(this);

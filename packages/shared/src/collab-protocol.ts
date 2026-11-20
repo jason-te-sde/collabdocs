@@ -16,7 +16,12 @@ export const COLLAB_EVENTS = {
   revoked: "revoked",
 } as const;
 
-export type RejectReason = "forbidden" | "too_large" | "malformed";
+/**
+ * Why a message was refused. `document_full`: the document has reached its storage
+ * cap and takes no more writes. `overloaded`: the server cannot persist updates as
+ * fast as this socket sends them; the socket is closed right after this notice.
+ */
+export type RejectReason = "forbidden" | "too_large" | "malformed" | "document_full" | "overloaded";
 
 export interface RejectedNotice {
   event: string;

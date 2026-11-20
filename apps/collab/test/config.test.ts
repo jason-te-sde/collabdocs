@@ -16,6 +16,11 @@ describe("configuration", () => {
       maxMessagesPerSecond: 100,
       messageBurst: 200,
       maxConnectionsPerDocument: 250,
+      maxBytesPerSecond: 262_144,
+      byteBurst: 2_097_152,
+      maxDocumentBytes: 16_777_216,
+      maxPendingBytes: 8_388_608,
+      maxAwarenessBytes: 8_192,
     });
     expect(DEFAULT_PERSISTENCE).toEqual({
       compactEveryUpdates: 200,
@@ -36,6 +41,11 @@ describe("configuration", () => {
       COLLAB_MAX_MESSAGES_PER_SECOND: "11",
       COLLAB_MESSAGE_BURST: "12",
       COLLAB_MAX_CONNECTIONS_PER_DOCUMENT: "13",
+      COLLAB_MAX_BYTES_PER_SECOND: "21",
+      COLLAB_BYTE_BURST: "22",
+      COLLAB_MAX_DOCUMENT_BYTES: "23",
+      COLLAB_MAX_PENDING_BYTES: "24",
+      COLLAB_MAX_AWARENESS_BYTES: "25",
       COLLAB_COMPACT_EVERY_UPDATES: "14",
       COLLAB_COMPACT_AFTER_MS: "15",
       COLLAB_UNLOAD_GRACE_MS: "16",
@@ -51,6 +61,11 @@ describe("configuration", () => {
         maxMessagesPerSecond: 11,
         messageBurst: 12,
         maxConnectionsPerDocument: 13,
+        maxBytesPerSecond: 21,
+        byteBurst: 22,
+        maxDocumentBytes: 23,
+        maxPendingBytes: 24,
+        maxAwarenessBytes: 25,
       },
       persistence: {
         compactEveryUpdates: 14,
@@ -71,5 +86,12 @@ describe("configuration", () => {
     expect(() =>
       resolveOptions({ databaseUrl: "x", tokenSecret: SECRET, limits: { maxUpdateBytes: -1 } }),
     ).toThrow(/positive/);
+    expect(() =>
+      resolveOptions({
+        databaseUrl: "x",
+        tokenSecret: SECRET,
+        limits: { maxUpdateBytes: 1000, byteBurst: 999 },
+      }),
+    ).toThrow(/byteBurst/);
   });
 });
