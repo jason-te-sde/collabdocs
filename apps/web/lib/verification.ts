@@ -51,6 +51,28 @@ export async function sendVerificationEmail(email: string, now = Date.now()): Pr
 }
 
 /**
+ * The database work of `sendVerificationEmail` without its effect: a token row is written
+ * and removed again, in the same two statements and one transaction. Registering an
+ * address that already has an account runs this, so that it takes the same time as
+ * registering a new one and the response does not say which it was. The identifier is
+ * one no address can have, so it never touches a real token.
+ */
+export async function matchVerificationWrite(email: string, now = Date.now()): Promise<void> {
+  const identifier = `decoy:${normalizeEmail(email)}`;
+  const db = getDb();
+  await db.$transaction([
+    db.verificationToken.create({
+      data: {
+        identifier,
+        token: hashToken(randomBytes(32).toString("base64url")),
+        expires: new Date(now + VERIFICATION_TTL_MS),
+      },
+    }),
+    db.verificationToken.deleteMany({ where: { identifier } }),
+  ]);
+}
+
+/**
  * Turns invitations to this address into memberships. Called when the address has
  * been verified, in the same transaction, so a pending invitation is never both
  * kept and applied.

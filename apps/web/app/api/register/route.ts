@@ -1,10 +1,14 @@
 import { z } from "zod";
 import { handle, json, readBody } from "@/lib/api";
-import { getDb, isUniqueViolation } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
 import { hashPassword, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 import { clientIp, enforceRegisterLimit } from "@/lib/rate-limit";
-import { sendAccountExistsEmail, sendVerificationEmail } from "@/lib/verification";
+import {
+  matchVerificationWrite,
+  sendAccountExistsEmail,
+  sendVerificationEmail,
+} from "@/lib/verification";
 
 const schema = z.object({
   email: z.email().max(254),
@@ -22,18 +26,25 @@ export const POST = handle(async (request: Request) => {
   // The answer is the same whether or not the address has an account: an endpoint that
   // said "taken" would list the registered addresses for anyone. The owner of an address
   // that already has an account is told by email instead.
-  let created = false;
-  try {
-    await getDb().user.create({ data: { email, name: body.name ?? null, passwordHash } });
-    created = true;
-  } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
-  }
+  // One INSERT ... ON CONFLICT DO NOTHING, so that an address that exists costs the same as
+  // one that does not: a unique violation raised and caught would be measurably slower.
+  const { count } = await getDb().user.createMany({
+    data: [{ email, name: body.name ?? null, passwordHash }],
+    skipDuplicates: true,
+  });
+  const created = count === 1;
   let verification: "sent" | "failed" = "sent";
   try {
     // The account works at once; an unverified address only holds back invitations to it.
-    if (created) await sendVerificationEmail(email);
-    else await sendAccountExistsEmail(email);
+    if (created) {
+      await sendVerificationEmail(email);
+    } else {
+      // The new-address path hashes the password, inserts a user and a token, and sends
+      // one mail. This one hashed the password above; it also does the token's database
+      // work and sends one mail, so the two take the same time.
+      await matchVerificationWrite(email);
+      await sendAccountExistsEmail(email);
+    }
   } catch (error) {
     console.error("could not send the registration email", error);
     verification = "failed";
