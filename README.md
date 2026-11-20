@@ -22,7 +22,7 @@ Not done yet: the sync-latency load test ([Performance](#performance)) and the p
 
 ![Ada's browser, with Grace's selection and Linus's cursor shown live, each with a name, and the presence list naming all three](docs/images/editor-two-cursors.png)
 
-The screenshot is Ada's browser, one of three Playwright browsers in the same document. Grace has a word selected and Linus has his cursor at the end of the last line; both appear live, in their own colour, with their name, and the presence list above the text names everyone in the document. The screenshots are regenerated with `SCREENSHOTS=1 npm run test:e2e -- screenshots`.
+The screenshot is Ada's browser, one of three Playwright browsers in the same document. Grace has a word selected and Linus has his cursor at the end of the last line; both appear live, in their own colour, with their name, and the presence list above the text names everyone in the document. To produce them again, run `SCREENSHOTS=1 npm run test:e2e -- screenshots`.
 
 | Sharing                                                                                                        | Offline                                                                                                                              |
 | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
