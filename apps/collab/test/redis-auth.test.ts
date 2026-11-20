@@ -45,8 +45,9 @@ describe("access to Redis alone cannot inject updates", () => {
     await settle(300);
     expect(client.text).toBe("");
     expect(
-      server.logs.find("ignored a relay frame that is malformed or not signed with the secret")
-        .length,
+      server.logs.find(
+        "ignored a relay frame that is malformed, stale or not signed with the secret",
+      ).length,
     ).toBeGreaterThanOrEqual(2);
 
     // The same message with the right secret goes through, so the forgery failed on the tag alone.

@@ -143,7 +143,9 @@ export async function startCollabServer(
       peers.on("messageBuffer", (_channel: Buffer, frame: Buffer) => {
         const message = decodeRelay(frame, secret);
         if (!message) {
-          logger.warn("ignored a relay frame that is malformed or not signed with the secret");
+          logger.warn(
+            "ignored a relay frame that is malformed, stale or not signed with the secret",
+          );
           return;
         }
         if (message.from === instanceId) return;

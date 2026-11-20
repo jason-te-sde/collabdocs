@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MEMBERSHIP_MAX_AGE_MS, messageMac } from "@collabdocs/shared/redis-auth";
 import { decodeRelay, encodeRelay } from "../src/relay";
 
 const SECRET = "relay-secret-0123456789-abcdefghijklmnop";
@@ -42,5 +43,29 @@ describe("relay frame", () => {
     expect(decodeRelay(altered, SECRET)).toBeNull();
     // Without the tag, a body alone is not enough.
     expect(decodeRelay(frame.subarray(0, frame.length - 32), SECRET)).toBeNull();
+  });
+
+  it("refuses a frame outside the time window, however well signed", () => {
+    const message = {
+      from: "i1",
+      documentId: "d",
+      kind: "awareness",
+      data: Uint8Array.of(1),
+    } as const;
+    const now = 5_000_000;
+    const frame = encodeRelay(message, SECRET, now);
+    expect(decodeRelay(frame, SECRET, now + MEMBERSHIP_MAX_AGE_MS - 1)).not.toBeNull();
+    expect(decodeRelay(frame, SECRET, now + MEMBERSHIP_MAX_AGE_MS + 1)).toBeNull();
+    expect(decodeRelay(frame, SECRET, now - 60_000)).toBeNull();
+  });
+
+  it("does not accept a tag made for the membership channel", () => {
+    const frame = encodeRelay(
+      { from: "i1", documentId: "d", kind: "update", data: Uint8Array.of(1) },
+      SECRET,
+    );
+    const body = frame.subarray(0, frame.length - 32);
+    const wrongPurpose = Buffer.concat([body, messageMac(SECRET, "membership", body)]);
+    expect(decodeRelay(wrongPurpose, SECRET)).toBeNull();
   });
 });

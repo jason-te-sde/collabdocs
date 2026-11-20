@@ -12,10 +12,15 @@ import {
 } from "./collab-protocol";
 
 export const MIN_REDIS_SECRET_BYTES = 32;
-/** How old a membership message may be when it arrives. Bounds a replay of a captured one. */
+/** How old a signed message may be when it arrives. Bounds a replay of a captured one. */
 export const MEMBERSHIP_MAX_AGE_MS = 120_000;
-/** How far in the future a membership message's timestamp may be (clock skew). */
-const MEMBERSHIP_MAX_SKEW_MS = 30_000;
+/** How far in the future a signed message's timestamp may be (clock skew). */
+const MAX_SKEW_MS = 30_000;
+
+/** True when a message issued at `issued` (ms since the epoch) is fresh enough at `now`. */
+export function issuedWithinWindow(issued: number, now: number = Date.now()): boolean {
+  return issued >= now - MEMBERSHIP_MAX_AGE_MS && issued <= now + MAX_SKEW_MS;
+}
 
 export const MAC_BYTES = 32;
 
@@ -59,7 +64,7 @@ export function openMembershipChange(
   if (!parts) return null;
   const [, issuedText, tagHex, json] = parts as unknown as [string, string, string, string];
   const issued = Number(issuedText);
-  if (issued < now - MEMBERSHIP_MAX_AGE_MS || issued > now + MEMBERSHIP_MAX_SKEW_MS) return null;
+  if (!issuedWithinWindow(issued, now)) return null;
   const expected = messageMac(secret, "membership", `${issuedText}.${json}`);
   if (!macMatches(expected, Buffer.from(tagHex, "hex"))) return null;
   return parseMembershipChange(json);

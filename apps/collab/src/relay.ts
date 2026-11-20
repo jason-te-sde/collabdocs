@@ -1,4 +1,9 @@
-import { MAC_BYTES, macMatches, messageMac } from "@collabdocs/shared/redis-auth";
+import {
+  MAC_BYTES,
+  issuedWithinWindow,
+  macMatches,
+  messageMac,
+} from "@collabdocs/shared/redis-auth";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import type { RelayKind } from "./types";
@@ -18,11 +23,19 @@ const KINDS: readonly RelayKind[] = ["update", "awareness"];
 /**
  * The frame carried on the relay channel: the message, then an HMAC-SHA256 over it
  * made with the shared secret, so that a publisher without the secret cannot inject
- * updates. Binary, because JSON would turn every Yjs update into an array of numbers.
+ * updates. The time of issue is under the tag, and a frame older than the window of
+ * membership messages is ignored, so a captured frame cannot be replayed for long
+ * (replayed awareness would otherwise bring back a cursor that is gone). Binary,
+ * because JSON would turn every Yjs update into an array of numbers.
  */
-export function encodeRelay(message: RelayMessage, secret: string): Buffer {
+export function encodeRelay(
+  message: RelayMessage,
+  secret: string,
+  now: number = Date.now(),
+): Buffer {
   const encoder = encoding.createEncoder();
   encoding.writeUint8(encoder, KINDS.indexOf(message.kind));
+  encoding.writeFloat64(encoder, now);
   encoding.writeVarString(encoder, message.from);
   encoding.writeVarString(encoder, message.documentId);
   encoding.writeVarString(encoder, message.userId ?? "");
@@ -31,8 +44,12 @@ export function encodeRelay(message: RelayMessage, secret: string): Buffer {
   return Buffer.concat([body, messageMac(secret, "relay", body)]);
 }
 
-/** Returns null for a frame that is not well formed or whose HMAC does not match. */
-export function decodeRelay(frame: Uint8Array, secret: string): RelayMessage | null {
+/** Returns null for a frame that is not well formed, whose HMAC does not match, or that is too old. */
+export function decodeRelay(
+  frame: Uint8Array,
+  secret: string,
+  now: number = Date.now(),
+): RelayMessage | null {
   if (frame.byteLength <= MAC_BYTES) return null;
   const body = frame.subarray(0, frame.byteLength - MAC_BYTES);
   const tag = frame.subarray(frame.byteLength - MAC_BYTES);
@@ -41,6 +58,7 @@ export function decodeRelay(frame: Uint8Array, secret: string): RelayMessage | n
     const decoder = decoding.createDecoder(body);
     const kind = KINDS[decoding.readUint8(decoder)];
     if (!kind) return null;
+    if (!issuedWithinWindow(decoding.readFloat64(decoder), now)) return null;
     const from = decoding.readVarString(decoder);
     const documentId = decoding.readVarString(decoder);
     const userId = decoding.readVarString(decoder);
