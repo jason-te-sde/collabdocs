@@ -6,7 +6,7 @@ import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 import { ConnectionStatus, describeConnection } from "@/components/editor/connection-status";
 import { describeRejection, RejectionNotice } from "@/components/editor/rejection-notice";
-import { CollabProvider, type SocketLike } from "@/lib/collab/provider";
+import { CollabProvider, SYNCED_MARK, type SocketLike } from "@/lib/collab/provider";
 
 class FakeSocket implements SocketLike {
   connected = false;
@@ -106,6 +106,34 @@ describe("the provider and a rejected notice", () => {
     syncProtocol.writeSyncStep2(server, new Y.Doc());
     socket.fire("sync", encoding.toUint8Array(server));
     expect(provider.getSnapshot().rejection).toBeNull();
+  });
+});
+
+describe("the synced mark that the Lighthouse gate looks for", () => {
+  it("is made when the server's state arrives, and not before", async () => {
+    const mark = vi.spyOn(performance, "mark");
+    try {
+      const socket = new FakeSocket();
+      const provider = new CollabProvider({
+        documentId: "doc-1",
+        doc: new Y.Doc(),
+        url: "http://collab.test",
+        fetchToken: async () => ({ token: "t", role: "editor" as const }),
+        createSocket: () => socket,
+        network: { isOnline: () => true, subscribe: () => () => {} },
+        random: () => 0.5,
+      });
+      provider.connect();
+      await flush();
+      socket.accept();
+      expect(mark).not.toHaveBeenCalledWith(SYNCED_MARK);
+      const server = encoding.createEncoder();
+      syncProtocol.writeSyncStep2(server, new Y.Doc());
+      socket.fire("sync", encoding.toUint8Array(server));
+      expect(mark).toHaveBeenCalledWith(SYNCED_MARK);
+    } finally {
+      mark.mockRestore();
+    }
   });
 });
 

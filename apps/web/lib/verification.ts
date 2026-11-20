@@ -12,8 +12,11 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function appUrl(): string {
-  return (process.env.AUTH_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+/** The public URL of the app: AUTH_URL; in development only, http://localhost:3000 when it is unset. */
+export function appUrl(env: Record<string, string | undefined> = process.env): string {
+  const url = env.AUTH_URL || (env.NODE_ENV === "production" ? "" : "http://localhost:3000");
+  if (!url) throw new Error("AUTH_URL is required in production");
+  return url.replace(/\/+$/, "");
 }
 
 /**

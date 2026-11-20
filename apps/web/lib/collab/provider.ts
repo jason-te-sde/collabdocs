@@ -135,6 +135,23 @@ function defaultSocket(url: string): SocketLike {
   });
 }
 
+/**
+ * The name of the User Timing mark made when a connection has the server's state. The
+ * Lighthouse job reads it from the report of the editor page (the `user-timings` audit)
+ * and fails if it is missing: a page scored while the socket was not connected would
+ * otherwise pass on its category scores alone. The mark costs nothing and is harmless
+ * elsewhere.
+ */
+export const SYNCED_MARK = "collabdocs:synced";
+
+function markSynced(): void {
+  try {
+    if (typeof performance !== "undefined") performance.mark(SYNCED_MARK);
+  } catch {
+    // A browser without User Timing: nothing to record.
+  }
+}
+
 type Listener = () => void;
 
 export class CollabProvider {
@@ -384,6 +401,7 @@ export class CollabProvider {
 
   private checkHandshake(): void {
     if (!this.gotStepTwo) return;
+    if (!this.snapshot.synced) markSynced();
     this.update({ synced: true, rejection: null });
     // For a writer the handshake is also the server's step 1, answered with our
     // step 2: that is what carries the edits made offline.

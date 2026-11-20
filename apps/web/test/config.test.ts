@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { register } from "@/instrumentation";
 import { assertRuntimeConfig } from "@/lib/config";
+import { appUrl } from "@/lib/verification";
 
 const SECRET = "test-redis-message-secret-0123456789-abcd";
 const base = {
@@ -36,6 +37,26 @@ describe("assertRuntimeConfig", () => {
 
   it("asks for nothing without Redis", () => {
     expect(() => assertRuntimeConfig({})).not.toThrow();
+  });
+});
+
+describe("AUTH_URL", () => {
+  it("is required in production and optional in development", () => {
+    expect(() => assertRuntimeConfig({ NODE_ENV: "production" })).toThrow(/AUTH_URL is required/);
+    expect(() => assertRuntimeConfig({ NODE_ENV: "production", AUTH_URL: "" })).toThrow(
+      /AUTH_URL is required/,
+    );
+    expect(() =>
+      assertRuntimeConfig({ NODE_ENV: "production", AUTH_URL: "https://docs.example.com" }),
+    ).not.toThrow();
+    expect(() => assertRuntimeConfig({ NODE_ENV: "development" })).not.toThrow();
+    expect(() => assertRuntimeConfig({})).not.toThrow();
+  });
+
+  it("falls back to localhost for links in development only", () => {
+    expect(appUrl({ NODE_ENV: "development" })).toBe("http://localhost:3000");
+    expect(appUrl({ AUTH_URL: "https://docs.example.com/" })).toBe("https://docs.example.com");
+    expect(() => appUrl({ NODE_ENV: "production" })).toThrow(/AUTH_URL/);
   });
 });
 

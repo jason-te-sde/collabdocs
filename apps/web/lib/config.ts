@@ -8,6 +8,11 @@ import { MIN_REDIS_SECRET_BYTES } from "@collabdocs/shared/redis-auth";
  * or short secret, or one shared with another secret, stops the app at start.
  */
 export function assertRuntimeConfig(env: Record<string, string | undefined> = process.env): void {
+  // Links in mail and the callback URLs are built from the public URL. Guessing
+  // localhost in production would send users links that cannot work.
+  if (env.NODE_ENV === "production" && !env.AUTH_URL) {
+    throw new Error("AUTH_URL is required in production: the public URL of the web app");
+  }
   if (!env.REDIS_URL) return;
   const secret = env.REDIS_MESSAGE_SECRET;
   if (!secret) throw new Error("REDIS_MESSAGE_SECRET is required when REDIS_URL is set");
