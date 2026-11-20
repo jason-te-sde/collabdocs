@@ -1,8 +1,6 @@
-export default function Home() {
-  return (
-    <main>
-      <h1>CollabDocs</h1>
-      <p>The editor arrives in J-T3. Sign in at /api/auth/signin.</p>
-    </main>
-  );
+import { redirect } from "next/navigation";
+import { getPageUser } from "@/lib/session";
+
+export default async function Home() {
+  redirect((await getPageUser()) ? "/documents" : "/sign-in");
 }
