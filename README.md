@@ -4,7 +4,7 @@ A real-time collaborative document editor: Yjs over Socket.IO, live cursors and 
 
 ## Status
 
-Version 0.1 is in progress, task by task. Done so far (J-T1 and J-T2):
+Version 0.1 is in progress, task by task. Done so far (J-T1 to J-T3):
 
 - an npm workspaces monorepo: `apps/web` (Next.js, App Router), `apps/collab` (the collab server) and `packages/shared`;
 - the PostgreSQL schema and migrations, with the ownership and membership rules enforced by the database;
@@ -12,9 +12,26 @@ Version 0.1 is in progress, task by task. Done so far (J-T1 and J-T2):
 - the role model (`owner`, `editor`, `viewer`), `can(role, action)`, and the REST routes for documents and memberships, each checking the session and the role;
 - the signed, short-lived collaboration token that the socket server requires;
 - the collab server: Yjs sync and awareness over Socket.IO, a role check on every event, persistence (an update log compacted into snapshots), several instances behind Redis, and configurable limits;
+- the editor: TipTap bound to a Yjs document, remote cursors and a presence list, a connection indicator, read-only mode for viewers, edits kept in IndexedDB and merged on reconnect, pages for sign-in, the document list and sharing (Tailwind and Radix UI);
+- Playwright end-to-end tests with two or three real browsers;
 - CI.
 
-Not built yet: the editor UI (J-T3), the load tests (J-T4), the Lighthouse gate (J-T5). There is no editor to look at.
+Not built yet: the load tests (J-T4) and the Lighthouse gate (J-T5).
+
+## The editor
+
+![Three people in one document: Ada's page shows Grace's selection and Linus's cursor with their names](docs/images/editor-two-cursors.png)
+
+The screenshot is Ada's view. Grace has a word selected and Linus has his cursor at the end of the last line; both appear live, in their own colour, with their name, and the presence list above the text names everyone in the document.
+
+| Sharing                                                                                                        | Offline                                                                                                                              |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| ![The share dialog: invite by email with a role, change a role, remove a member](docs/images/share-dialog.png) | ![Grace is offline: the status line says her edits are saved on this device and will sync when she is back](docs/images/offline.png) |
+
+- **Roles in the page.** A viewer's editor is not editable, has no toolbar and sends nothing to the server (the server would refuse it anyway). An editor can invite people; only the owner can change roles or remove members. A role change takes effect in the open page: the server closes the socket, the client asks for a new token and reconnects with the new role.
+- **Offline.** The browser going offline closes the socket at once. Edits stay in the local Y.Doc and in IndexedDB (one database per user and document, deleted when the server says the user has no access any more), so they survive a reload too. When the connection returns, the sync handshake sends them and both sides converge; nothing is overwritten, because Yjs merges per character.
+- **Connection states.** Connecting, connected, syncing, reconnecting, offline (with a note when there are unsynced edits) and no access. The indicator is a polite live region.
+- **Reconnecting** is done by the client, with a fresh collaboration token on every attempt and exponential backoff with jitter (see [0004](docs/design/0004-editor-client.md)).
 
 ## Goals
 
@@ -33,6 +50,7 @@ The project is built to deliver four things. They are goals, **not yet measured*
 | `apps/collab`     | The Socket.IO collaboration server                                            |
 | `packages/shared` | Role rules (`can`), the collaboration token signer and verifier, shared types |
 | `docs/design`     | Decision records                                                              |
+| `docs/images`     | README screenshots, produced by the e2e tests                                 |
 | `scripts`         | `preflight.sh` and the hygiene check                                          |
 
 The workspaces are managed with **npm workspaces**, not pnpm: the machine this was built on has neither pnpm nor corepack, and nothing here needs more than npm offers.
@@ -59,6 +77,8 @@ Edit `apps/web/.env`: set `DATABASE_URL` (include your user name if PostgreSQL h
 npm run db:deploy                     # apply the migrations
 npm run dev -w apps/web               # http://localhost:3000
 ```
+
+The editor also needs the collab server (next section). The page tells the browser where it is from `COLLAB_URL` (default `http://localhost:4000`), which is read when the page is rendered, so one build serves any deployment.
 
 Create a user and try the API:
 
@@ -106,6 +126,27 @@ npm run preflight       # everything CI runs
 ```
 
 `scripts/preflight.sh` creates `collabdocs_test` if it is missing and uses it when `DATABASE_URL` is unset; `REDIS_URL` defaults to `redis://localhost:6379`. Set `REDIS_URL` before `npm test`. A test that cannot reach PostgreSQL or Redis fails; it does not skip. The collab server tests start real servers in process on random ports and use their own Redis channel names. CI runs the same steps with PostgreSQL and Redis as service containers.
+
+## End-to-end tests
+
+```sh
+npx playwright install chromium       # once; or set PW_CHANNEL=chrome to use an installed Chrome
+export DATABASE_URL=postgresql://you@localhost:5432/collabdocs_test
+npm run build -w apps/web
+npm run test:e2e                      # starts the web app on :3100 and a collab server on :4100
+```
+
+The tests drive two or three browser contexts at once (owner, editor, viewer) against the built app and a real collab server, with PostgreSQL and Redis running:
+
+- two people type at the same time and both end with the same text containing both inputs;
+- a viewer sees the edits live, cannot type, and sends nothing;
+- remote cursors, selections and the presence list;
+- one context goes offline (`context.setOffline(true)`), both keep typing, it returns, and each side's characters are all there, in order, with none added;
+- edits made while the server is unreachable survive a reload and sync afterwards;
+- a removed member is disconnected and loses the page and the local copy; a demoted editor becomes read-only without a reload;
+- registration, sign-in, creating, renaming and sharing through the pages.
+
+The README's screenshots are produced by `SCREENSHOTS=1 npm run test:e2e -- screenshots`.
 
 ## API
 
