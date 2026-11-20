@@ -22,7 +22,8 @@
     "db:deploy": "npm run db:deploy -w apps/web",
     "hygiene": "node scripts/check-hygiene.mjs",
     "preflight": "bash scripts/preflight.sh",
-    "test:scripts": "node --test scripts/check-hygiene.test.mjs"
+    "test:scripts": "node --test scripts/check-hygiene.test.mjs",
+    "test:e2e": "npm run test:e2e -w apps/web"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

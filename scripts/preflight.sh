@@ -6,7 +6,8 @@
 # must contain "test", because the tests delete every row. Unset, it defaults to
 # a collabdocs_test database on localhost, created if it is missing. REDIS_URL
 # defaults to redis://localhost:6379; the collab server tests use their own
-# channel names and do not touch other keys.
+# channel names and do not touch other keys. The e2e step starts the web app on
+# port 3100 and a collab server on port 4100.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -52,6 +53,12 @@ npm run --silent test
 
 step "build"
 npm run --silent build
+
+# Two browsers against the built web app and a real collab server. Needs a
+# browser: `npx playwright install chromium`, or PW_CHANNEL=chrome for an
+# installed Google Chrome.
+step "e2e"
+npm run --silent test:e2e
 
 echo
 echo "preflight: ok"

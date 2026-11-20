@@ -107,6 +107,8 @@ function defaultSocket(url: string): SocketLike {
   return io(url, {
     autoConnect: false,
     reconnection: false,
+    // Socket.IO's default is 20 s; a handshake that takes longer is as good as lost.
+    timeout: 10_000,
     // One transport: long polling would need sticky sessions behind a load balancer.
     transports: ["websocket"],
     forceNew: true,

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
-import { COLLAB_URL } from "@/lib/collab/config";
 import { CollabProvider } from "@/lib/collab/provider";
 import { requestCollabToken } from "@/lib/collab/token";
 
@@ -20,7 +19,11 @@ export interface CollabSession {
  * never read each other's copies. When the server says the user has no access
  * (any more), the local copy is deleted.
  */
-export function useCollabSession(documentId: string, userId: string): CollabSession | null {
+export function useCollabSession(
+  documentId: string,
+  userId: string,
+  collabUrl: string,
+): CollabSession | null {
   const [session, setSession] = useState<CollabSession | null>(null);
 
   useEffect(() => {
@@ -29,7 +32,7 @@ export function useCollabSession(documentId: string, userId: string): CollabSess
     const provider = new CollabProvider({
       documentId,
       doc,
-      url: COLLAB_URL,
+      url: collabUrl,
       fetchToken: () => requestCollabToken(documentId),
     });
     let cleared = false;
@@ -51,7 +54,7 @@ export function useCollabSession(documentId: string, userId: string): CollabSess
       doc.destroy();
       setSession(null);
     };
-  }, [documentId, userId]);
+  }, [documentId, userId, collabUrl]);
 
   return session;
 }

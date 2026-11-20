@@ -22,8 +22,16 @@ interface EditorUser {
   name: string;
 }
 
-export function DocumentEditor({ documentId, user }: { documentId: string; user: EditorUser }) {
-  const session = useCollabSession(documentId, user.id);
+export function DocumentEditor({
+  documentId,
+  user,
+  collabUrl,
+}: {
+  documentId: string;
+  user: EditorUser;
+  collabUrl: string;
+}) {
+  const session = useCollabSession(documentId, user.id, collabUrl);
   if (!session) {
     return (
       <p role="status" className="text-slate-800">
