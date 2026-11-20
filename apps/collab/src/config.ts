@@ -15,6 +15,22 @@ export interface Limits {
   maxBytesPerSecond: number;
   /** Payload bytes a socket may send in one burst; at least `maxUpdateBytes`. */
   byteBurst: number;
+  /** Sockets one user may hold on one document, across all instances. */
+  maxConnectionsPerUser: number;
+  /** Handshakes one user may start in a burst, per instance; then `handshakesPerSecondPerUser` applies. */
+  handshakeBurstPerUser: number;
+  handshakesPerSecondPerUser: number;
+  /** The same per client address, per instance. */
+  handshakeBurstPerIp: number;
+  handshakesPerSecondPerIp: number;
+  /** Payload bytes per second all sockets of one user share, per instance. */
+  maxBytesPerSecondPerUser: number;
+  /** Payload bytes all sockets of one user may send in one burst; at least `maxUpdateBytes`. */
+  byteBurstPerUser: number;
+  /** Payload bytes received but not yet processed, over every socket of the instance. */
+  maxInFlightBytes: number;
+  /** Unresolved Yjs structure per document (updates whose dependencies never arrived), in bytes. */
+  maxPendingStructBytes: number;
   /** The most a document may occupy in the database (snapshot plus log), in bytes. */
   maxDocumentBytes: number;
   /** Updates accepted but not yet committed to the log, per document, in bytes. */
@@ -58,6 +74,12 @@ export interface CollabServerOptions {
   /** A connection slot not refreshed for this long is treated as gone (an instance that died). */
   connectionTtlMs: number;
   membershipChannel: string;
+  /**
+   * How many proxies in front of the server append to X-Forwarded-For. The client
+   * address of a handshake is the entry that many places from the end; 0 (the
+   * default) uses the socket's own address and ignores the header.
+   */
+  trustedProxyHops: number;
   /** Allowed browser origin for the socket handshake; unset allows none (same-origin only). */
   corsOrigin?: string | string[];
   limits: Limits;
@@ -72,6 +94,15 @@ export const DEFAULT_LIMITS: Limits = {
   maxMessagesPerSecond: 100,
   messageBurst: 200,
   maxConnectionsPerDocument: 250,
+  maxConnectionsPerUser: 8,
+  handshakeBurstPerUser: 20,
+  handshakesPerSecondPerUser: 1,
+  handshakeBurstPerIp: 100,
+  handshakesPerSecondPerIp: 5,
+  maxBytesPerSecondPerUser: 512 * 1024,
+  byteBurstPerUser: 4 * 1024 * 1024,
+  maxInFlightBytes: 64 * 1024 * 1024,
+  maxPendingStructBytes: 1024 * 1024,
   maxBytesPerSecond: 256 * 1024,
   byteBurst: 2 * 1024 * 1024,
   maxDocumentBytes: 16 * 1024 * 1024,
@@ -103,6 +134,7 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
     redisConnectTimeoutMs: 5_000,
     connectionTtlMs: 45_000,
     membershipChannel: "collabdocs:membership",
+    trustedProxyHops: 0,
     logger: consoleLogger,
     ...input,
     limits: { ...DEFAULT_LIMITS, ...input.limits },
@@ -131,6 +163,14 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
   }
   if (options.limits.byteBurst < options.limits.maxUpdateBytes) {
     throw new Error("byteBurst must be at least maxUpdateBytes, or the largest update never fits");
+  }
+  if (options.limits.byteBurstPerUser < options.limits.maxUpdateBytes) {
+    throw new Error(
+      "byteBurstPerUser must be at least maxUpdateBytes, or the largest update never fits",
+    );
+  }
+  if (!Number.isInteger(options.trustedProxyHops) || options.trustedProxyHops < 0) {
+    throw new Error("trustedProxyHops must be a whole number, 0 or more");
   }
   return options;
 }
@@ -166,12 +206,22 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
     ...defined({
       redisConnectTimeoutMs: number(env, "COLLAB_REDIS_CONNECT_TIMEOUT_MS"),
       connectionTtlMs: number(env, "COLLAB_CONNECTION_TTL_MS"),
+      trustedProxyHops: number(env, "COLLAB_TRUSTED_PROXY_HOPS"),
     }),
     limits: defined({
       maxUpdateBytes: number(env, "COLLAB_MAX_UPDATE_BYTES"),
       maxMessagesPerSecond: number(env, "COLLAB_MAX_MESSAGES_PER_SECOND"),
       messageBurst: number(env, "COLLAB_MESSAGE_BURST"),
       maxConnectionsPerDocument: number(env, "COLLAB_MAX_CONNECTIONS_PER_DOCUMENT"),
+      maxConnectionsPerUser: number(env, "COLLAB_MAX_CONNECTIONS_PER_USER"),
+      handshakeBurstPerUser: number(env, "COLLAB_HANDSHAKE_BURST_PER_USER"),
+      handshakesPerSecondPerUser: number(env, "COLLAB_HANDSHAKES_PER_SECOND_PER_USER"),
+      handshakeBurstPerIp: number(env, "COLLAB_HANDSHAKE_BURST_PER_IP"),
+      handshakesPerSecondPerIp: number(env, "COLLAB_HANDSHAKES_PER_SECOND_PER_IP"),
+      maxBytesPerSecondPerUser: number(env, "COLLAB_MAX_BYTES_PER_SECOND_PER_USER"),
+      byteBurstPerUser: number(env, "COLLAB_BYTE_BURST_PER_USER"),
+      maxInFlightBytes: number(env, "COLLAB_MAX_IN_FLIGHT_BYTES"),
+      maxPendingStructBytes: number(env, "COLLAB_MAX_PENDING_STRUCT_BYTES"),
       maxBytesPerSecond: number(env, "COLLAB_MAX_BYTES_PER_SECOND"),
       byteBurst: number(env, "COLLAB_BYTE_BURST"),
       maxDocumentBytes: number(env, "COLLAB_MAX_DOCUMENT_BYTES"),

@@ -19,7 +19,7 @@ import {
   RedisConnectionCounter,
   type ConnectionCounter,
 } from "./connections";
-import { RateLimiter, payloadBytes } from "./limits";
+import { KeyedRateLimiter, RateLimiter, clientAddress, payloadBytes } from "./limits";
 import { decodeRelay, encodeRelay } from "./relay";
 import { DocumentStore } from "./store";
 import type { CollabIo, CollabSocket, RelayKind } from "./types";
@@ -107,7 +107,10 @@ export async function startCollabServer(
     _data: Uint8Array,
     _userId?: string,
   ): void => {};
-  let counter: ConnectionCounter = new MemoryConnectionCounter(limits.maxConnectionsPerDocument);
+  let counter: ConnectionCounter = new MemoryConnectionCounter(
+    limits.maxConnectionsPerDocument,
+    limits.maxConnectionsPerUser,
+  );
 
   if (options.redisUrl) {
     const secret = options.redisMessageSecret!;
@@ -178,6 +181,7 @@ export async function startCollabServer(
         options.adapterKey,
         limits.maxConnectionsPerDocument,
         options.connectionTtlMs,
+        limits.maxConnectionsPerUser,
         logger,
       );
     } catch (error) {
@@ -206,13 +210,46 @@ export async function startCollabServer(
     },
   });
 
+  // Limits that hold for a user or an address however many sockets they open. Per instance.
+  const handshakesByIp = new KeyedRateLimiter(
+    limits.handshakesPerSecondPerIp,
+    limits.handshakeBurstPerIp,
+  );
+  const handshakesByUser = new KeyedRateLimiter(
+    limits.handshakesPerSecondPerUser,
+    limits.handshakeBurstPerUser,
+  );
+  const bytesByUser = new KeyedRateLimiter(
+    limits.maxBytesPerSecondPerUser,
+    limits.byteBurstPerUser,
+  );
+  /** Payload bytes received and not yet processed, over every socket of this instance. */
+  let inFlightBytes = 0;
+
   // The handshake: token, membership, capacity. Nothing else runs for a socket that fails here.
   io.use(async (socket, next) => {
     const refuse = (code: HandshakeErrorCode, why: string, fields: object = {}) => {
       logger.warn("handshake refused", { code, why, instance: instanceId, ...fields });
       next(new HandshakeError(code));
     };
+    // The transport's close is the one signal that a client left during the handshake
+    // (`disconnect` does not fire before the handshake completes). It is registered before
+    // any await: a slot taken after the client left is released as soon as it is known.
+    let slot: { documentId: string; userId: string } | null = null;
+    let gone = false;
+    socket.conn.once("close", () => {
+      gone = true;
+      if (slot) void counter.leave(slot.documentId, socket.id, slot.userId);
+    });
     try {
+      const address = clientAddress(
+        socket.handshake.address,
+        socket.handshake.headers["x-forwarded-for"],
+        options.trustedProxyHops,
+      );
+      if (!handshakesByIp.allow(address)) {
+        return refuse("rate_limited", "too many handshakes from this address", { address });
+      }
       const auth: unknown = socket.handshake.auth;
       const { token, documentId } = (typeof auth === "object" && auth !== null ? auth : {}) as {
         token?: unknown;
@@ -233,6 +270,12 @@ export async function startCollabServer(
         const why = error instanceof Error ? error.message : "invalid";
         return refuse("invalid_token", why, { documentId });
       }
+      if (!handshakesByUser.allow(claims.userId)) {
+        return refuse("rate_limited", "too many handshakes from this user", {
+          documentId,
+          userId: claims.userId,
+        });
+      }
       // A token cannot be revoked, so the membership is looked up again.
       const memberRole = await store.role(documentId, claims.userId);
       if (!memberRole) {
@@ -242,12 +285,25 @@ export async function startCollabServer(
         });
       }
       // Check and count in one step, so concurrent handshakes cannot overshoot the limit.
-      if (!(await counter.join(documentId, socket.id))) {
-        return refuse("too_many_connections", "document is at capacity", { documentId });
+      const joined = await counter.join(
+        documentId,
+        socket.id,
+        claims.userId,
+        () => socket.conn.readyState === "open",
+      );
+      if (joined !== "ok") {
+        return refuse(
+          "too_many_connections",
+          joined === "user_full" ? "user is at capacity" : "document is at capacity",
+          { documentId, userId: claims.userId },
+        );
       }
-      // `disconnect` does not fire for a socket that goes away before the handshake
-      // completes; the transport's close does.
-      socket.conn.once("close", () => void counter.leave(documentId, socket.id));
+      slot = { documentId, userId: claims.userId };
+      if (gone || socket.conn.readyState !== "open") {
+        // The client left while the slot was being taken.
+        await counter.leave(documentId, socket.id, claims.userId);
+        return refuse("server_error", "client left during the handshake", { documentId });
+      }
       socket.data = {
         documentId,
         userId: claims.userId,
@@ -303,17 +359,28 @@ export async function startCollabServer(
           socket.disconnect(true);
           return;
         }
-        if (!byteBudget.allow(payloadBytes(payload))) {
+        const cost = payloadBytes(payload);
+        // The user's budget is shared by all their sockets, so opening more of them,
+        // or reconnecting, does not buy a fresh burst.
+        if (!byteBudget.allow(cost) || !bytesByUser.allow(userId, cost)) {
           logger.warn("byte budget exceeded; disconnecting", { documentId, userId });
           socket.disconnect(true);
           return;
         }
+        if (inFlightBytes + cost > limits.maxInFlightBytes) {
+          logger.warn("too many payload bytes in flight; disconnecting", { documentId, userId });
+          socket.disconnect(true);
+          return;
+        }
+        inFlightBytes += cost;
         tail = tail.then(async () => {
           try {
             const entry = await attached;
             if (entry && socket.connected) await entry[handle](socket, payload);
           } catch (error) {
             logger.error("event failed", { documentId, ...errorFields(error) });
+          } finally {
+            inFlightBytes -= cost;
           }
         });
       };

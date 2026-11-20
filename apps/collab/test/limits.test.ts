@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RateLimiter } from "../src/limits";
+import { KeyedRateLimiter, RateLimiter, clientAddress } from "../src/limits";
 import {
   TestClient,
   adapterKey,
@@ -38,6 +38,38 @@ describe("RateLimiter", () => {
     expect(limiter.allow()).toBe(false);
     now += 10_000; // never more than the burst
     expect(Array.from({ length: 6 }, () => limiter.allow()).filter(Boolean)).toHaveLength(5);
+  });
+});
+
+describe("KeyedRateLimiter", () => {
+  it("gives each key its own bucket and stays bounded", () => {
+    const now = 0;
+    const limiter = new KeyedRateLimiter(1, 2, () => now, 3);
+    expect([limiter.allow("a"), limiter.allow("a"), limiter.allow("a")]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(limiter.allow("b")).toBe(true);
+    for (const key of ["c", "d", "e", "f", "g"]) limiter.allow(key);
+    expect(limiter.size).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("clientAddress", () => {
+  it("believes X-Forwarded-For only behind trusted proxies, counting from the end", () => {
+    expect(clientAddress("10.0.0.9", "1.1.1.1, 2.2.2.2", 0)).toBe("10.0.0.9");
+    expect(clientAddress("10.0.0.9", "1.1.1.1, 2.2.2.2", 1)).toBe("2.2.2.2");
+    expect(clientAddress("10.0.0.9", "1.1.1.1, 2.2.2.2", 2)).toBe("1.1.1.1");
+    expect(clientAddress("10.0.0.9", undefined, 1)).toBe("10.0.0.9");
+    expect(clientAddress("10.0.0.9", "2.2.2.2", 3)).toBe("10.0.0.9");
+  });
+
+  it("groups an IPv6 address by its /64 and unwraps IPv4-mapped ones", () => {
+    expect(clientAddress("2001:db8:1:2:aaaa:bbbb:cccc:dddd", undefined, 0)).toBe("2001:db8:1:2");
+    expect(clientAddress("2001:db8:1:2::5", undefined, 0)).toBe("2001:db8:1:2");
+    expect(clientAddress("2001:db8::1", undefined, 0)).toBe("2001:db8:0:0");
+    expect(clientAddress("::ffff:10.1.2.3", undefined, 0)).toBe("10.1.2.3");
   });
 });
 
