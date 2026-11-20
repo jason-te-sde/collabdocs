@@ -9,12 +9,16 @@ import {
   type HandshakeErrorCode,
   type Role,
 } from "@collabdocs/shared";
-import { createAdapter } from "@socket.io/redis-adapter";
-import { Redis } from "ioredis";
+import { Redis, type RedisOptions } from "ioredis";
 import { Server } from "socket.io";
 import { resolveOptions, type CollabServerOptions } from "./config";
 import { DocumentRegistry } from "./document";
 import { errorFields } from "./logger";
+import {
+  MemoryConnectionCounter,
+  RedisConnectionCounter,
+  type ConnectionCounter,
+} from "./connections";
 import { RateLimiter, payloadBytes } from "./limits";
 import { decodeRelay, encodeRelay } from "./relay";
 import { DocumentStore } from "./store";
@@ -33,6 +37,32 @@ export interface CollabServer {
 
 /** Extra bytes a Socket.IO packet adds around the payload (event name, framing). */
 const FRAME_OVERHEAD_BYTES = 1024;
+
+/** How long a command to Redis may take before it fails. */
+const REDIS_COMMAND_TIMEOUT_MS = 1500;
+
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Redis did not answer within ${ms} ms (${what})`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Resolves when the client is ready; rejects if it is not within `ms`. */
+function readyWithin(client: Redis, ms: number): Promise<void> {
+  if (client.status === "ready") return Promise.resolve();
+  return within(
+    new Promise<void>((resolve) => client.once("ready", () => resolve())),
+    ms,
+    "connect",
+  ).catch(() => {
+    throw new Error(`could not connect to Redis within ${ms} ms`);
+  });
+}
 
 /** The weaker of two roles; the order is the order of ROLES, strongest first. */
 function weaker(a: Role, b: Role): Role {
@@ -72,50 +102,82 @@ export async function startCollabServer(
 
   const cleanups: Array<() => Promise<void>> = [];
   let relay = (_documentId: string, _kind: RelayKind, _data: Uint8Array): void => {};
+  let counter: ConnectionCounter = new MemoryConnectionCounter(limits.maxConnectionsPerDocument);
 
   if (options.redisUrl) {
-    const pub = new Redis(options.redisUrl);
-    const sub = pub.duplicate();
-    const members = pub.duplicate();
-    for (const client of [pub, sub, members]) {
-      client.on("error", (error) => logger.error("redis error", errorFields(error)));
-    }
-    // The adapter answers cluster-wide questions about rooms (the connection limit).
-    io.adapter(createAdapter(pub, sub, { key: options.adapterKey }));
-    // Yjs traffic between instances goes over a channel of our own, in binary.
-    const relayChannel = `${options.adapterKey}:relay`;
-    const peers = pub.duplicate();
-    peers.on("error", (error) => logger.error("redis error", errorFields(error)));
-    peers.on("messageBuffer", (_channel: Buffer, frame: Buffer) => {
-      const message = decodeRelay(frame);
-      if (!message) {
-        logger.warn("ignored a malformed relay frame");
-        return;
-      }
-      if (message.from === instanceId) return;
-      registry.applyRemote(message.documentId, message.kind, message.data);
-    });
-    await peers.subscribe(relayChannel);
-    relay = (documentId, kind, data) => {
-      void pub
-        .publish(relayChannel, encodeRelay({ from: instanceId, documentId, kind, data }))
-        .catch((error: unknown) =>
-          logger.warn("relay publish failed", { documentId, ...errorFields(error) }),
-        );
+    const clients: Redis[] = [];
+    const open = (label: string, extra: RedisOptions = {}): Redis => {
+      const client = new Redis(options.redisUrl!, {
+        connectTimeout: options.redisConnectTimeoutMs,
+        ...extra,
+      });
+      client.on("error", (error) =>
+        logger.error("redis error", { client: label, ...errorFields(error) }),
+      );
+      clients.push(client);
+      return client;
     };
-    members.on("message", (_channel: string, raw: string) => {
-      const change = parseMembershipChange(raw);
-      if (!change) {
-        logger.warn("ignored a malformed membership message");
-        return;
-      }
-      registry.revoke(change);
-    });
-    await members.subscribe(options.membershipChannel);
+    try {
+      // Commands fail at once while Redis is unreachable instead of waiting in a queue:
+      // a handshake must be refused promptly, and a relay publish must not pile up.
+      const pub = open("publisher", {
+        enableOfflineQueue: false,
+        commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+      });
+      // Subscribers resubscribe by themselves after a reconnect.
+      const peers = open("relay");
+      const members = open("membership");
+      await Promise.all(
+        clients.map((client) => readyWithin(client, options.redisConnectTimeoutMs)),
+      );
+      const relayChannel = `${options.adapterKey}:relay`;
+      peers.on("messageBuffer", (_channel: Buffer, frame: Buffer) => {
+        const message = decodeRelay(frame);
+        if (!message) {
+          logger.warn("ignored a malformed relay frame");
+          return;
+        }
+        if (message.from === instanceId) return;
+        registry.applyRemote(message.documentId, message.kind, message.data);
+      });
+      members.on("message", (_channel: string, raw: string) => {
+        const change = parseMembershipChange(raw);
+        if (!change) {
+          logger.warn("ignored a malformed membership message");
+          return;
+        }
+        registry.revoke(change);
+      });
+      await within(peers.subscribe(relayChannel), options.redisConnectTimeoutMs, "relay subscribe");
+      await within(
+        members.subscribe(options.membershipChannel),
+        options.redisConnectTimeoutMs,
+        "membership subscribe",
+      );
+      relay = (documentId, kind, data) => {
+        void pub
+          .publish(relayChannel, encodeRelay({ from: instanceId, documentId, kind, data }))
+          .catch((error: unknown) =>
+            logger.warn("relay publish failed", { documentId, ...errorFields(error) }),
+          );
+      };
+      counter = new RedisConnectionCounter(
+        pub,
+        options.adapterKey,
+        limits.maxConnectionsPerDocument,
+        options.connectionTtlMs,
+        logger,
+      );
+    } catch (error) {
+      for (const client of clients) client.disconnect();
+      await store.close();
+      throw error;
+    }
     cleanups.push(async () => {
-      for (const client of [pub, sub, members, peers]) client.disconnect();
+      for (const client of clients) client.disconnect();
     });
   }
+  cleanups.push(async () => counter.close());
 
   const registry = new DocumentRegistry({
     io,
@@ -167,11 +229,13 @@ export async function startCollabServer(
           userId: claims.userId,
         });
       }
-      // fetchSockets asks every instance behind the adapter, so the count is cluster-wide.
-      const inRoom = await io.in(`doc:${documentId}`).fetchSockets();
-      if (inRoom.length >= limits.maxConnectionsPerDocument) {
+      // Check and count in one step, so concurrent handshakes cannot overshoot the limit.
+      if (!(await counter.join(documentId, socket.id))) {
         return refuse("too_many_connections", "document is at capacity", { documentId });
       }
+      // `disconnect` does not fire for a socket that goes away before the handshake
+      // completes; the transport's close does.
+      socket.conn.once("close", () => void counter.leave(documentId, socket.id));
       socket.data = {
         documentId,
         userId: claims.userId,

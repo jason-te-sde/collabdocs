@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@collabdocs/shared": "*",
-    "@socket.io/redis-adapter": "8.3.0",
     "ioredis": "5.11.1",
     "lib0": "0.2.120",
     "pg": "8.23.1",

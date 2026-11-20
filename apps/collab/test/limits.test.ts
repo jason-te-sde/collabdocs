@@ -3,11 +3,13 @@ import type { CollabServer } from "../src/index";
 import { RateLimiter } from "../src/limits";
 import {
   TestClient,
+  adapterKey,
   cleanup,
   closeDb,
   connectErrorOf,
   createDocument,
   launch,
+  redisClient,
   resetDb,
   settle,
   storedText,
@@ -196,5 +198,68 @@ describe("one editor cannot exhaust the server", () => {
     // The update that did not fit was never applied, so the other client never saw it.
     expect(other.text).toHaveLength(3000);
     expect(await updateRows(f.documentId)).toHaveLength(2);
+  });
+});
+
+describe("the connection limit under concurrent handshakes", () => {
+  async function stampede(
+    servers: Awaited<ReturnType<typeof launch>>[],
+    count: number,
+  ): Promise<{ connected: number; refused: number }> {
+    const f = await createDocument();
+    const clients = await Promise.all(
+      Array.from({ length: count }, (_, i) =>
+        TestClient.connect(servers[i % servers.length]!, f, "owner", "owner", { noWait: true }),
+      ),
+    );
+    await settle(1500);
+    return {
+      connected: clients.filter((c) => c.connected).length,
+      refused: clients.filter((c) => c.connectErrors[0]?.code === "too_many_connections").length,
+    };
+  }
+
+  it("admits exactly the limit when many sockets arrive at once on one instance", async () => {
+    const server = await launch({ limits: { maxConnectionsPerDocument: 3 } });
+    expect(await stampede([server], 12)).toEqual({ connected: 3, refused: 9 });
+  });
+
+  it("admits exactly the limit when many sockets arrive at once on two instances", async () => {
+    const a = await launch({
+      redis: true,
+      instanceId: "A",
+      limits: { maxConnectionsPerDocument: 3 },
+    });
+    const b = await launch({
+      redis: true,
+      instanceId: "B",
+      limits: { maxConnectionsPerDocument: 3 },
+    });
+    expect(await stampede([a, b], 12)).toEqual({ connected: 3, refused: 9 });
+  });
+
+  it("counts sockets that other instances hold, and forgets the ones that expired", async () => {
+    const server = await launch({ redis: true, limits: { maxConnectionsPerDocument: 1 } });
+    const f = await createDocument();
+    const redis = redisClient();
+    const key = `${adapterKey()}:conn:${f.documentId}`;
+    // A socket on another instance, alive for another minute.
+    await redis.zadd(key, Date.now() + 60_000, "remote-socket");
+    expect((await connectErrorOf(server, f, "owner", "owner")).code).toBe("too_many_connections");
+    // The same entry, after its instance died and the expiry passed.
+    await redis.zadd(key, Date.now() - 1000, "remote-socket");
+    const client = await TestClient.connect(server, f, "owner", "owner");
+    expect(client.connected).toBe(true);
+  });
+
+  it("frees the slot when the socket goes away, also in Redis mode", async () => {
+    const server = await launch({ redis: true, limits: { maxConnectionsPerDocument: 1 } });
+    const f = await createDocument();
+    const first = await TestClient.connect(server, f, "owner", "owner");
+    expect((await connectErrorOf(server, f, "editor", "editor")).code).toBe("too_many_connections");
+    first.close();
+    await settle(300);
+    const second = await TestClient.connect(server, f, "editor", "editor");
+    expect(second.connected).toBe(true);
   });
 });

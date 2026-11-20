@@ -181,7 +181,7 @@ export async function launch(
     databaseUrl: databaseUrl(),
     tokenSecret: TOKEN_SECRET,
     logger: logs,
-    adapterKey: `test-io-${RUN}`,
+    adapterKey: adapterKey(),
     membershipChannel: `test-membership-${RUN}`,
     // Quiet by default: tests that look at a timer set their own.
     persistence: {
@@ -196,6 +196,10 @@ export async function launch(
   return Object.assign(server, { logs });
 }
 
+export function adapterKey(): string {
+  return `test-io-${RUN}`;
+}
+
 export function membershipChannel(): string {
   return `test-membership-${RUN}`;
 }
@@ -204,6 +208,13 @@ export async function publishMembership(message: string): Promise<void> {
   const publisher = new Redis(redisUrl());
   redisClients.push(publisher);
   await publisher.publish(membershipChannel(), message);
+}
+
+/** A Redis connection that the test closes at cleanup. */
+export function redisClient(): Redis {
+  const client = new Redis(redisUrl());
+  redisClients.push(client);
+  return client;
 }
 
 export async function cleanup(): Promise<void> {

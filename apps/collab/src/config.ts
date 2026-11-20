@@ -43,8 +43,12 @@ export interface CollabServerOptions {
   tokenSecret: string;
   /** Without it the server runs alone: no adapter, no membership channel. */
   redisUrl?: string;
-  /** Prefix of the Socket.IO adapter's Redis channels. */
+  /** Prefix of this server's Redis channel and keys. */
   adapterKey: string;
+  /** With Redis configured, the server refuses to start if it cannot connect within this time. */
+  redisConnectTimeoutMs: number;
+  /** A connection slot not refreshed for this long is treated as gone (an instance that died). */
+  connectionTtlMs: number;
   membershipChannel: string;
   /** Allowed browser origin for the socket handshake; unset allows none (same-origin only). */
   corsOrigin?: string | string[];
@@ -87,6 +91,8 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
   const options: CollabServerOptions = {
     port: 0,
     adapterKey: "collabdocs-io",
+    redisConnectTimeoutMs: 5_000,
+    connectionTtlMs: 45_000,
     membershipChannel: "collabdocs:membership",
     logger: consoleLogger,
     ...input,
@@ -97,6 +103,8 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
     throw new Error(`COLLAB_TOKEN_SECRET must be at least ${MIN_SECRET_BYTES} bytes`);
   }
   for (const [name, value] of [
+    ["redisConnectTimeoutMs", options.redisConnectTimeoutMs] as const,
+    ["connectionTtlMs", options.connectionTtlMs] as const,
     ...Object.entries(options.limits),
     ...Object.entries(options.persistence),
   ]) {
@@ -135,6 +143,10 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
     ...(env.REDIS_URL ? { redisUrl: env.REDIS_URL } : {}),
     ...(origins ? { corsOrigin: origins } : {}),
     ...(env.COLLAB_INSTANCE_ID ? { instanceId: env.COLLAB_INSTANCE_ID } : {}),
+    ...defined({
+      redisConnectTimeoutMs: number(env, "COLLAB_REDIS_CONNECT_TIMEOUT_MS"),
+      connectionTtlMs: number(env, "COLLAB_CONNECTION_TTL_MS"),
+    }),
     limits: defined({
       maxUpdateBytes: number(env, "COLLAB_MAX_UPDATE_BYTES"),
       maxMessagesPerSecond: number(env, "COLLAB_MAX_MESSAGES_PER_SECOND"),
