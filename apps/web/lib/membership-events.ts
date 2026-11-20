@@ -1,12 +1,10 @@
-import {
-  MEMBERSHIP_CHANNEL,
-  encodeMembershipChange,
-  type MembershipChange,
-} from "@collabdocs/shared";
+import { MEMBERSHIP_CHANNEL, type MembershipChange } from "@collabdocs/shared";
+import { MIN_REDIS_SECRET_BYTES, sealMembershipChange } from "@collabdocs/shared/redis-auth";
 import { Redis } from "ioredis";
 
 const globalForRedis = globalThis as unknown as { collabdocsRedis?: Redis };
 let warned = false;
+let warnedSecret = false;
 
 function publisher(url: string): Redis {
   if (!globalForRedis.collabdocsRedis) {
@@ -35,8 +33,19 @@ export async function publishMembershipChange(change: MembershipChange): Promise
     }
     return;
   }
+  // The collab servers act only on a message signed with this secret.
+  const secret = process.env.REDIS_MESSAGE_SECRET;
+  if (!secret || new TextEncoder().encode(secret).length < MIN_REDIS_SECRET_BYTES) {
+    if (!warnedSecret) {
+      warnedSecret = true;
+      console.error(
+        `REDIS_MESSAGE_SECRET is missing or shorter than ${MIN_REDIS_SECRET_BYTES} bytes; membership changes are not published`,
+      );
+    }
+    return;
+  }
   try {
-    await publisher(url).publish(MEMBERSHIP_CHANNEL, encodeMembershipChange(change));
+    await publisher(url).publish(MEMBERSHIP_CHANNEL, sealMembershipChange(change, secret));
   } catch (error) {
     console.error("could not publish a membership change", error);
   }

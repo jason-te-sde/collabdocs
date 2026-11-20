@@ -26,6 +26,7 @@ const env = {
   AUTH_SECRET: "e2e-auth-secret-that-is-long-enough-0123456789",
   AUTH_URL: WEB_URL,
   AUTH_TRUST_HOST: "true",
+  REDIS_MESSAGE_SECRET: "e2e-redis-message-secret-0123456789-abcdefg",
   COLLAB_TOKEN_SECRET: "e2e-collab-secret-0123456789-abcdefghijklmnop",
   COLLAB_URL: `http://localhost:${COLLAB_PORT}`,
   COLLAB_PORT: String(COLLAB_PORT),

@@ -92,7 +92,9 @@ describe("membership changes", () => {
     await publishMembership("garbage");
     await publishMembership(JSON.stringify({ documentId: f.documentId }));
     await waitFor(
-      () => server.logs.find("ignored a malformed membership message").length === 2,
+      () =>
+        server.logs.find("ignored a membership message that is malformed, stale or not signed")
+          .length === 2,
       "two warnings",
     );
     expect(a.connected).toBe(true);

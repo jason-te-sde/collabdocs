@@ -1,8 +1,5 @@
-import {
-  MEMBERSHIP_CHANNEL,
-  parseMembershipChange,
-  type MembershipChange,
-} from "@collabdocs/shared";
+import { MEMBERSHIP_CHANNEL, type MembershipChange } from "@collabdocs/shared";
+import { openMembershipChange } from "@collabdocs/shared/redis-auth";
 import { Redis } from "ioredis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DELETE as deleteDocument } from "@/app/api/documents/[id]/route";
@@ -17,12 +14,15 @@ if (!redisUrl) throw new Error("REDIS_URL is not set; this test needs a Redis se
 
 let subscriber: Redis;
 let received: MembershipChange[];
+let raw: string[];
 
 beforeEach(async () => {
   received = [];
+  raw = [];
   subscriber = new Redis(redisUrl);
-  subscriber.on("message", (_channel, raw) => {
-    const change = parseMembershipChange(raw);
+  subscriber.on("message", (_channel, message) => {
+    raw.push(message);
+    const change = openMembershipChange(message, process.env.REDIS_MESSAGE_SECRET ?? "");
     if (change) received.push(change);
   });
   await subscriber.subscribe(MEMBERSHIP_CHANNEL);
@@ -86,5 +86,24 @@ describe("membership change events", () => {
     expect(response.status).toBe(403);
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(received).toEqual([]);
+  });
+
+  it("publishes nothing when there is no message secret to sign with", async () => {
+    const secret = process.env.REDIS_MESSAGE_SECRET;
+    process.env.REDIS_MESSAGE_SECRET = "";
+    try {
+      const f = await fixture();
+      signInAs(f.users.owner.id);
+      const response = await changeRole(
+        jsonRequest("PATCH", { role: "editor" }),
+        ctx({ id: f.documentId, userId: f.users.target.id }),
+      );
+      // The change itself still happens; only the notification is skipped.
+      expect(response.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(raw).toEqual([]);
+    } finally {
+      process.env.REDIS_MESSAGE_SECRET = secret;
+    }
   });
 });

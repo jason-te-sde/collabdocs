@@ -1,4 +1,5 @@
 import { MIN_SECRET_BYTES } from "@collabdocs/shared";
+import { MIN_REDIS_SECRET_BYTES } from "@collabdocs/shared/redis-auth";
 import { consoleLogger, type Logger } from "./logger";
 
 export interface Limits {
@@ -45,6 +46,11 @@ export interface CollabServerOptions {
   tokenSecret: string;
   /** Without it the server runs alone: no adapter, no membership channel. */
   redisUrl?: string;
+  /**
+   * Signs the messages on the Redis channels. Required with `redisUrl`; at least 32
+   * bytes, and different from `tokenSecret`. The web app needs the same value.
+   */
+  redisMessageSecret?: string;
   /** Prefix of this server's Redis channel and keys. */
   adapterKey: string;
   /** With Redis configured, the server refuses to start if it cannot connect within this time. */
@@ -105,6 +111,16 @@ export function resolveOptions(input: OptionOverrides): CollabServerOptions {
   if (new TextEncoder().encode(options.tokenSecret).length < MIN_SECRET_BYTES) {
     throw new Error(`COLLAB_TOKEN_SECRET must be at least ${MIN_SECRET_BYTES} bytes`);
   }
+  if (options.redisUrl) {
+    const secret = options.redisMessageSecret;
+    if (!secret) throw new Error("REDIS_MESSAGE_SECRET is required when REDIS_URL is set");
+    if (new TextEncoder().encode(secret).length < MIN_REDIS_SECRET_BYTES) {
+      throw new Error(`REDIS_MESSAGE_SECRET must be at least ${MIN_REDIS_SECRET_BYTES} bytes`);
+    }
+    if (secret === options.tokenSecret) {
+      throw new Error("REDIS_MESSAGE_SECRET must differ from COLLAB_TOKEN_SECRET");
+    }
+  }
   for (const [name, value] of [
     ["redisConnectTimeoutMs", options.redisConnectTimeoutMs] as const,
     ["connectionTtlMs", options.connectionTtlMs] as const,
@@ -144,6 +160,7 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
     port: number(env, "COLLAB_PORT") ?? 4000,
     ...(env.COLLAB_HOST ? { host: env.COLLAB_HOST } : {}),
     ...(env.REDIS_URL ? { redisUrl: env.REDIS_URL } : {}),
+    ...(env.REDIS_MESSAGE_SECRET ? { redisMessageSecret: env.REDIS_MESSAGE_SECRET } : {}),
     ...(origins ? { corsOrigin: origins } : {}),
     ...(env.COLLAB_INSTANCE_ID ? { instanceId: env.COLLAB_INSTANCE_ID } : {}),
     ...defined({

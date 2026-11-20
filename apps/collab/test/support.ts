@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { signCollabToken, type Role } from "@collabdocs/shared";
+import { parseMembershipChange, signCollabToken, type Role } from "@collabdocs/shared";
+import { sealMembershipChange } from "@collabdocs/shared/redis-auth";
 import { Redis } from "ioredis";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
@@ -12,6 +13,7 @@ import { startCollabServer, type CollabServer } from "../src/index";
 import type { Logger } from "../src/logger";
 
 export const TOKEN_SECRET = "test-collab-secret-0123456789-abcdefghij";
+export const REDIS_SECRET = "test-redis-message-secret-0123456789-abcd";
 
 export function databaseUrl(): string {
   const url = process.env.DATABASE_URL;
@@ -190,6 +192,7 @@ export async function launch(
       unloadGraceMs: 60_000,
     },
     ...(redis ? { redisUrl: redisUrl() } : {}),
+    redisMessageSecret: REDIS_SECRET,
     ...rest,
   });
   started.push(server);
@@ -204,10 +207,26 @@ export function membershipChannel(): string {
   return `test-membership-${RUN}`;
 }
 
+/**
+ * Publishes a membership message the way the web app does: sealed with the secret.
+ * A message that is not a well-formed change goes out as it is.
+ */
 export async function publishMembership(message: string): Promise<void> {
+  const change = parseMembershipChange(message);
+  await publishRaw(
+    membershipChannel(),
+    change ? sealMembershipChange(change, REDIS_SECRET) : message,
+  );
+}
+
+export async function publishRaw(channel: string, message: string | Buffer): Promise<void> {
   const publisher = new Redis(redisUrl());
   redisClients.push(publisher);
-  await publisher.publish(membershipChannel(), message);
+  await publisher.publish(channel, message);
+}
+
+export function relayChannel(): string {
+  return `${adapterKey()}:relay`;
 }
 
 /** A Redis connection that the test closes at cleanup. */

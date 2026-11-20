@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS, DEFAULT_PERSISTENCE, optionsFromEnv, resolveOptions } from "../src/config";
 
 const SECRET = "test-collab-secret-0123456789-abcdefghij";
+const REDIS_SECRET = "test-redis-message-secret-0123456789-abcd";
 const base = { DATABASE_URL: "postgresql://localhost/x", COLLAB_TOKEN_SECRET: SECRET };
 
 describe("configuration", () => {
@@ -36,6 +37,7 @@ describe("configuration", () => {
     const options = optionsFromEnv({
       ...base,
       REDIS_URL: "redis://r:6379",
+      REDIS_MESSAGE_SECRET: REDIS_SECRET,
       COLLAB_PORT: "5000",
       COLLAB_CORS_ORIGIN: "https://a.test, https://b.test",
       COLLAB_MAX_UPDATE_BYTES: "10",
@@ -57,6 +59,7 @@ describe("configuration", () => {
     expect(options).toMatchObject({
       port: 5000,
       redisUrl: "redis://r:6379",
+      redisMessageSecret: REDIS_SECRET,
       corsOrigin: ["https://a.test", "https://b.test"],
       limits: {
         maxUpdateBytes: 10,
@@ -78,6 +81,20 @@ describe("configuration", () => {
         roleCacheMs: 19,
       },
     });
+  });
+
+  it("needs a message secret, a long and different one, when Redis is used", () => {
+    const withRedis = { ...base, REDIS_URL: "redis://r:6379" };
+    expect(() => optionsFromEnv(withRedis)).toThrow(/REDIS_MESSAGE_SECRET is required/);
+    expect(() => optionsFromEnv({ ...withRedis, REDIS_MESSAGE_SECRET: "short" })).toThrow(
+      /32 bytes/,
+    );
+    expect(() => optionsFromEnv({ ...withRedis, REDIS_MESSAGE_SECRET: SECRET })).toThrow(/differ/);
+    expect(optionsFromEnv({ ...withRedis, REDIS_MESSAGE_SECRET: REDIS_SECRET }).redisUrl).toBe(
+      "redis://r:6379",
+    );
+    // Without Redis the secret is not needed.
+    expect(optionsFromEnv(base).redisMessageSecret).toBeUndefined();
   });
 
   it("refuses a missing database, a missing or short secret, and bad numbers", () => {

@@ -4,11 +4,11 @@ import type { AddressInfo } from "node:net";
 import {
   COLLAB_EVENTS,
   ROLES,
-  parseMembershipChange,
   verifyCollabToken,
   type HandshakeErrorCode,
   type Role,
 } from "@collabdocs/shared";
+import { openMembershipChange } from "@collabdocs/shared/redis-auth";
 import { Redis, type RedisOptions } from "ioredis";
 import { Server } from "socket.io";
 import { resolveOptions, type CollabServerOptions } from "./config";
@@ -110,6 +110,7 @@ export async function startCollabServer(
   let counter: ConnectionCounter = new MemoryConnectionCounter(limits.maxConnectionsPerDocument);
 
   if (options.redisUrl) {
+    const secret = options.redisMessageSecret!;
     const clients: Redis[] = [];
     const open = (label: string, extra: RedisOptions = {}): Redis => {
       const client = new Redis(options.redisUrl!, {
@@ -137,18 +138,18 @@ export async function startCollabServer(
       );
       const relayChannel = `${options.adapterKey}:relay`;
       peers.on("messageBuffer", (_channel: Buffer, frame: Buffer) => {
-        const message = decodeRelay(frame);
+        const message = decodeRelay(frame, secret);
         if (!message) {
-          logger.warn("ignored a malformed relay frame");
+          logger.warn("ignored a relay frame that is malformed or not signed with the secret");
           return;
         }
         if (message.from === instanceId) return;
         registry.applyRemote(message.documentId, message.kind, message.data, message.userId);
       });
       members.on("message", (_channel: string, raw: string) => {
-        const change = parseMembershipChange(raw);
+        const change = openMembershipChange(raw, secret);
         if (!change) {
-          logger.warn("ignored a malformed membership message");
+          logger.warn("ignored a membership message that is malformed, stale or not signed");
           return;
         }
         registry.revoke(change);
@@ -163,13 +164,10 @@ export async function startCollabServer(
         void pub
           .publish(
             relayChannel,
-            encodeRelay({
-              from: instanceId,
-              documentId,
-              kind,
-              data,
-              ...(userId ? { userId } : {}),
-            }),
+            encodeRelay(
+              { from: instanceId, documentId, kind, data, ...(userId ? { userId } : {}) },
+              secret,
+            ),
           )
           .catch((error: unknown) =>
             logger.warn("relay publish failed", { documentId, ...errorFields(error) }),
