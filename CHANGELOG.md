@@ -21,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Accounts.** The sign-in limiter reads the email the way Auth.js does (JSON and form bodies; a repeated field or an ambiguous body is refused). Registration and invitations answer the same for every address, with the details sent by email, and the invite route is rate limited. An invitation binds only while its inviter may still share. An empty `TRUSTED_PROXY_HOPS` means the default; IPv6 clients count per /64. The web app refuses to start with Redis and no usable `REDIS_MESSAGE_SECRET`.
 - **Tests** for the guards that survived mutation: the document cap at load, after a compaction and after a reconcile, a failing role query on the write path, the awareness state limit, a frozen Redis, the heartbeat, the purpose separation of the MACs and the single use of a verification link.
 
+### Changed (third review round)
+
+- **Collab server.** The per-address handshake limit is an anti-flood ceiling (2000 burst, 100 per second) counted only after the token verifies, so one anonymous client behind an unconfigured proxy cannot lock the others out; a warning is logged when `X-Forwarded-For` arrives and `COLLAB_TRUSTED_PROXY_HOPS` was never set. The in-memory limiters keep at most `COLLAB_RATE_LIMITER_MAX_KEYS` keys, evict the least recently used and count evictions at `/metrics`.
+- **Accounts.** Registration does the same work for a new and an existing address. Invitations keep one row per inviter (a second inviter no longer takes over the first's), are limited per inviter and address with a mail cap per address, use a fixed mail subject and a flattened body, and answer an existing member with an id of the same format. The sign-in limiter matches the credentials route the way Auth.js resolves it, so no spelling of the URL skips it. `AUTH_URL` is required in production.
+- **Editor.** A refused write (`document_full`, `too_large`, `forbidden`, `overloaded`, anything else) shows an alert saying what happened and what to do, and the indicator stops saying "Syncing".
+- **CI.** The Lighthouse job fails when a report has a runtime error or when the editor page was scored without the `collabdocs:synced` mark.
+
 ### Added
 
 - **Monorepo.** npm workspaces: `apps/web` (Next.js 16, App Router), `apps/collab` and `packages/shared`. TypeScript strict, ESLint 9, Prettier, Vitest; Playwright is installed for later tasks.
