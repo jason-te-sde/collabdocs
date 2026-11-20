@@ -1,0 +1,8 @@
+co-authored-by:
+generated (with|by)
+\bclaude\b
+\banthropic\b
+chatgpt
+copilot
+\bAI[- ](generated|assisted|written|authored)
+\u{1F916}
