@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Accounts.** Email verification with a pluggable mailer; invitations to an unverified address are held as pending and bind on verification; sign-in, registration and link requests are rate limited per client address and per account, with Redis counters and a per-process fallback.
 - **Tests** for the database triggers, index and CHECK constraints, and for guards that nothing covered: relay after commit, the advisory locks, `REPEATABLE READ`, the body cap, the timing equaliser. The web tests drive the real Auth.js handlers for credentials sign-in and the GitHub-linking refusal.
 
+### Changed (second review round)
+
+- **Collab server.** A connection slot is released on every path, including a client that leaves during the handshake, and the heartbeat refreshes only sockets that are still connected, re-adds a slot that vanished and sends every document in one round. New per-user limits: sockets per user per document, a handshake rate limit per user and per address, one byte budget shared by a user's sockets, and a bound on payload bytes in flight. Updates whose dependencies are missing count against the document cap and the pending-bytes bound and are capped per document. A full document accepts updates that only delete. A write whose socket was revoked during its role check is dropped. Relay frames carry an issue time under the HMAC.
+- **Accounts.** The sign-in limiter reads the email the way Auth.js does (JSON and form bodies; a repeated field or an ambiguous body is refused). Registration and invitations answer the same for every address, with the details sent by email, and the invite route is rate limited. An invitation binds only while its inviter may still share. An empty `TRUSTED_PROXY_HOPS` means the default; IPv6 clients count per /64. The web app refuses to start with Redis and no usable `REDIS_MESSAGE_SECRET`.
+- **Tests** for the guards that survived mutation: the document cap at load, after a compaction and after a reconcile, a failing role query on the write path, the awareness state limit, a frozen Redis, the heartbeat, the purpose separation of the MACs and the single use of a verification link.
+
 ### Added
 
 - **Monorepo.** npm workspaces: `apps/web` (Next.js 16, App Router), `apps/collab` and `packages/shared`. TypeScript strict, ESLint 9, Prettier, Vitest; Playwright is installed for later tasks.

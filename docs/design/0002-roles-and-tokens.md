@@ -44,7 +44,7 @@ The secret is `COLLAB_TOKEN_SECRET`: at least 32 bytes, and different from `AUTH
 - A token is a snapshot of a role. It cannot be revoked, so a demoted or removed member keeps the old role for at most the token's life. The collab server must therefore re-check against the database, or drop connections on a membership change; the collab server does both ([0003](0003-collab-server.md)). Five minutes is the bound if it fails to.
 - A user asks for a new token by calling the endpoint again; clients refresh before expiry.
 - `can` knows roles, not documents. Ownership of a specific document is a database fact, loaded per request, which costs one query per route call.
-- Only registered users can be invited, since there are no pending invitations.
+- An invitation is held for any address and answered the same whether or not the address has an account; it becomes a membership when the address is verified and its owner next opens the app, if the inviter may still share then (SECURITY.md).
 
 ## Alternatives rejected
 

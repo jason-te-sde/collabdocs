@@ -103,28 +103,38 @@ The web app asks for a token (`POST /api/documents/:id/collab-token`) and the cl
 
 Everything is configured by environment variables; the defaults are the ones in the table.
 
-| Variable                              | Default   | Meaning                                                         |
-| ------------------------------------- | --------- | --------------------------------------------------------------- |
-| `COLLAB_PORT`, `COLLAB_HOST`          | 4000, all | where it listens                                                |
-| `COLLAB_CORS_ORIGIN`                  | none      | allowed browser origins, comma separated                        |
-| `COLLAB_MAX_UPDATE_BYTES`             | 1048576   | largest sync message                                            |
-| `COLLAB_MAX_AWARENESS_BYTES`          | 8192      | largest awareness message                                       |
-| `COLLAB_MAX_MESSAGES_PER_SECOND`      | 100       | per socket; over it the socket is disconnected                  |
-| `COLLAB_MESSAGE_BURST`                | 200       | messages a socket may send at once                              |
-| `COLLAB_MAX_BYTES_PER_SECOND`         | 262144    | per socket; over it the socket is disconnected                  |
-| `COLLAB_BYTE_BURST`                   | 2097152   | bytes a socket may send at once (at least the update maximum)   |
-| `COLLAB_MAX_DOCUMENT_BYTES`           | 16777216  | snapshot plus log; past it writes are refused                   |
-| `COLLAB_MAX_PENDING_BYTES`            | 8388608   | accepted but not yet stored, per document; past it, disconnect  |
-| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT` | 250       | across instances                                                |
-| `REDIS_MESSAGE_SECRET`                | none      | required with `REDIS_URL`; signs the Redis messages             |
-| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`     | 5000      | start fails if Redis is not reachable within this               |
-| `COLLAB_CONNECTION_TTL_MS`            | 45000     | a dead instance's connection slots expire after this            |
-| `COLLAB_COMPACT_EVERY_UPDATES`        | 200       | compact the log into a snapshot after this many updates         |
-| `COLLAB_COMPACT_AFTER_MS`             | 30000     | or this long after the first uncompacted update                 |
-| `COLLAB_UNLOAD_GRACE_MS`              | 30000     | keep a document in memory this long after its last client left  |
-| `COLLAB_RECONCILE_INTERVAL_MS`        | 5000      | how often an instance reads the log for updates it did not see  |
-| `COLLAB_MEMBERSHIP_RECHECK_MS`        | 60000     | how often sockets are checked against the `Membership` table    |
-| `COLLAB_ROLE_CACHE_MS`                | 1000      | a socket's role is read again before a write if older than this |
+| Variable                                | Default   | Meaning                                                          |
+| --------------------------------------- | --------- | ---------------------------------------------------------------- |
+| `COLLAB_PORT`, `COLLAB_HOST`            | 4000, all | where it listens                                                 |
+| `COLLAB_CORS_ORIGIN`                    | none      | allowed browser origins, comma separated                         |
+| `COLLAB_MAX_UPDATE_BYTES`               | 1048576   | largest sync message                                             |
+| `COLLAB_MAX_AWARENESS_BYTES`            | 8192      | largest awareness message                                        |
+| `COLLAB_MAX_MESSAGES_PER_SECOND`        | 100       | per socket; over it the socket is disconnected                   |
+| `COLLAB_MESSAGE_BURST`                  | 200       | messages a socket may send at once                               |
+| `COLLAB_MAX_BYTES_PER_SECOND`           | 262144    | per socket; over it the socket is disconnected                   |
+| `COLLAB_BYTE_BURST`                     | 2097152   | bytes a socket may send at once (at least the update maximum)    |
+| `COLLAB_MAX_DOCUMENT_BYTES`             | 16777216  | snapshot plus log; past it writes are refused                    |
+| `COLLAB_MAX_PENDING_BYTES`              | 8388608   | accepted but not yet stored, per document; past it, disconnect   |
+| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT`   | 250       | across instances                                                 |
+| `COLLAB_MAX_CONNECTIONS_PER_USER`       | 8         | sockets one user may hold on one document, across instances      |
+| `COLLAB_HANDSHAKE_BURST_PER_USER`       | 20        | handshakes a user may start at once, per instance                |
+| `COLLAB_HANDSHAKES_PER_SECOND_PER_USER` | 1         | then this many per second; over it, `rate_limited`               |
+| `COLLAB_HANDSHAKE_BURST_PER_IP`         | 100       | the same per client address (IPv6: per /64), per instance        |
+| `COLLAB_HANDSHAKES_PER_SECOND_PER_IP`   | 5         |                                                                  |
+| `COLLAB_MAX_BYTES_PER_SECOND_PER_USER`  | 524288    | shared by all of a user's sockets, per instance                  |
+| `COLLAB_BYTE_BURST_PER_USER`            | 4194304   | at least the update maximum                                      |
+| `COLLAB_MAX_IN_FLIGHT_BYTES`            | 67108864  | received but not yet processed, all sockets of the instance      |
+| `COLLAB_MAX_PENDING_STRUCT_BYTES`       | 1048576   | updates waiting for a missing dependency, per document           |
+| `COLLAB_TRUSTED_PROXY_HOPS`             | 0         | proxies in front that append to `X-Forwarded-For` (0 ignores it) |
+| `REDIS_MESSAGE_SECRET`                  | none      | required with `REDIS_URL`; signs the Redis messages              |
+| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`       | 5000      | start fails if Redis is not reachable within this                |
+| `COLLAB_CONNECTION_TTL_MS`              | 45000     | a dead instance's connection slots expire after this             |
+| `COLLAB_COMPACT_EVERY_UPDATES`          | 200       | compact the log into a snapshot after this many updates          |
+| `COLLAB_COMPACT_AFTER_MS`               | 30000     | or this long after the first uncompacted update                  |
+| `COLLAB_UNLOAD_GRACE_MS`                | 30000     | keep a document in memory this long after its last client left   |
+| `COLLAB_RECONCILE_INTERVAL_MS`          | 5000      | how often an instance reads the log for updates it did not see   |
+| `COLLAB_MEMBERSHIP_RECHECK_MS`          | 60000     | how often sockets are checked against the `Membership` table     |
+| `COLLAB_ROLE_CACHE_MS`                  | 1000      | a socket's role is read again before a write if older than this  |
 
 ## Tests and checks
 
@@ -162,19 +172,19 @@ The README's screenshots are produced by `SCREENSHOTS=1 npm run test:e2e -- scre
 
 All bodies are JSON and must be sent with `Content-Type: application/json`. A caller who is not a member of a document gets `404`, the same answer as for a document that does not exist.
 
-| Route                                        | Needs                  | Does                                    |
-| -------------------------------------------- | ---------------------- | --------------------------------------- |
-| `POST /api/register`                         | nothing                | create a password account               |
-| `POST /api/documents`                        | a session              | create a document; the caller owns it   |
-| `GET /api/documents`                         | a session              | the documents the caller is a member of |
-| `GET /api/documents/:id`                     | `read`                 | one document and the caller's role      |
-| `PATCH /api/documents/:id`                   | `write`                | rename                                  |
-| `DELETE /api/documents/:id`                  | `delete`               | delete, with its memberships and data   |
-| `GET /api/documents/:id/memberships`         | `read`                 | list members                            |
-| `POST /api/documents/:id/memberships`        | `share`                | invite a registered user by email       |
-| `PATCH /api/documents/:id/memberships/:uid`  | `change-role`          | change a member's role                  |
-| `DELETE /api/documents/:id/memberships/:uid` | `change-role`, or self | remove a member, or leave               |
-| `POST /api/documents/:id/collab-token`       | `read`                 | a signed token for the collab server    |
+| Route                                        | Needs                  | Does                                                        |
+| -------------------------------------------- | ---------------------- | ----------------------------------------------------------- |
+| `POST /api/register`                         | nothing                | create a password account (same answer for a taken address) |
+| `POST /api/documents`                        | a session              | create a document; the caller owns it                       |
+| `GET /api/documents`                         | a session              | the documents the caller is a member of                     |
+| `GET /api/documents/:id`                     | `read`                 | one document and the caller's role                          |
+| `PATCH /api/documents/:id`                   | `write`                | rename                                                      |
+| `DELETE /api/documents/:id`                  | `delete`               | delete, with its memberships and data                       |
+| `GET /api/documents/:id/memberships`         | `read`                 | list members                                                |
+| `POST /api/documents/:id/memberships`        | `share`                | invite an address by email (always 202)                     |
+| `PATCH /api/documents/:id/memberships/:uid`  | `change-role`          | change a member's role                                      |
+| `DELETE /api/documents/:id/memberships/:uid` | `change-role`, or self | remove a member, or leave                                   |
+| `POST /api/documents/:id/collab-token`       | `read`                 | a signed token for the collab server                        |
 
 The role model and the token are described in [SECURITY.md](SECURITY.md) and [docs/design/0002-roles-and-tokens.md](docs/design/0002-roles-and-tokens.md).
 
