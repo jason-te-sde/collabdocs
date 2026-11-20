@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { can } from "@collabdocs/shared/permissions";
 import { Button } from "@/components/ui";
 import { getDocument } from "@/lib/client-api";
+import { renderCaret } from "@/lib/collab/caret";
 import { userColor } from "@/lib/collab/identity";
 import type { CollabProvider } from "@/lib/collab/provider";
 import { ConnectionStatus } from "./connection-status";
@@ -161,7 +162,11 @@ function Surface({
         // only undo this user's changes; the history extension would undo everyone's.
         StarterKit.configure({ undoRedo: false }),
         Collaboration.configure({ document: session.doc }),
-        CollaborationCaret.configure({ provider, user: { id: user.id, name: user.name, color } }),
+        CollaborationCaret.configure({
+          provider,
+          user: { id: user.id, name: user.name, color },
+          render: renderCaret,
+        }),
       ],
       editorProps: {
         attributes: {
