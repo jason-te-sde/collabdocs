@@ -1,4 +1,9 @@
-import { COLLAB_EVENTS, type RevokedNotice } from "@collabdocs/shared/collab-protocol";
+import {
+  COLLAB_EVENTS,
+  type RejectedNotice,
+  type RejectReason,
+  type RevokedNotice,
+} from "@collabdocs/shared/collab-protocol";
 import { can, type Role } from "@collabdocs/shared/permissions";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
@@ -43,7 +48,22 @@ export interface CollabSnapshot {
    */
   unsynced: boolean;
   deniedReason: "signed-out" | "no-access" | null;
+  /**
+   * Why the server refused the user's last write (a `rejected` notice), or null. While it is
+   * set the editor is not saving: it says so and what to do. Cleared by `dismissRejection`
+   * and when a new connection finishes its sync handshake; if the cause is still there, the
+   * next refused write sets it again. A code this client does not know is "unknown".
+   */
+  rejection: RejectReason | "unknown" | null;
 }
+
+const KNOWN_REASONS: readonly string[] = [
+  "forbidden",
+  "too_large",
+  "malformed",
+  "document_full",
+  "overloaded",
+];
 
 /** The part of a Socket.IO client socket that the provider uses. */
 export interface SocketLike {
@@ -135,6 +155,7 @@ export class CollabProvider {
     synced: false,
     unsynced: false,
     deniedReason: null,
+    rejection: null,
   };
   private everConnected = false;
   private failures = 0;
@@ -167,6 +188,7 @@ export class CollabProvider {
     );
     this.socket.on("sync", (data: ArrayBuffer | Uint8Array) => this.onSync(data));
     this.socket.on("awareness", (data: ArrayBuffer | Uint8Array) => this.onAwareness(data));
+    this.socket.on("rejected", (notice: RejectedNotice) => this.onRejected(notice));
     this.socket.on("revoked", (_notice: RevokedNotice) => {
       // The server closes the socket next. Skip the backoff: the token endpoint
       // decides whether this user still has access, and with which role.
@@ -362,11 +384,27 @@ export class CollabProvider {
 
   private checkHandshake(): void {
     if (!this.gotStepTwo) return;
-    this.update({ synced: true });
+    this.update({ synced: true, rejection: null });
     // For a writer the handshake is also the server's step 1, answered with our
     // step 2: that is what carries the edits made offline.
     if (this.snapshot.readOnly || this.answeredStepOne) this.update({ unsynced: false });
   }
+
+  private onRejected(notice: RejectedNotice): void {
+    // A refused cursor update costs nothing visible; only a refused write is the user's concern.
+    if (notice?.event === COLLAB_EVENTS.awareness) return;
+    const reason = typeof notice?.reason === "string" ? notice.reason : "";
+    // What was refused is in the local document only, and is not on the server.
+    this.update({
+      rejection: KNOWN_REASONS.includes(reason) ? (reason as RejectReason) : "unknown",
+      unsynced: !this.snapshot.readOnly || this.snapshot.unsynced,
+    });
+  }
+
+  /** Hides the rejection notice; it comes back if the server refuses another write. */
+  dismissRejection = (): void => {
+    this.update({ rejection: null });
+  };
 
   private onAwareness(data: ArrayBuffer | Uint8Array): void {
     try {

@@ -14,6 +14,7 @@ import { userColor } from "@/lib/collab/identity";
 import type { CollabProvider } from "@/lib/collab/provider";
 import { ConnectionStatus } from "./connection-status";
 import { PresenceList } from "./presence-list";
+import { RejectionNotice } from "./rejection-notice";
 import { ShareDialog } from "./share-dialog";
 import { useCollabSession, type CollabSession } from "./use-collab-session";
 import { usePresence } from "./use-presence";
@@ -135,6 +136,8 @@ function EditorView({
         <PresenceList users={presence} />
         <ConnectionStatus snapshot={snapshot} />
       </div>
+
+      <RejectionNotice snapshot={snapshot} onDismiss={provider.dismissRejection} />
 
       <Surface session={session} user={user} readOnly={snapshot.readOnly} provider={provider} />
     </div>

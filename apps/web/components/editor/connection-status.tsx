@@ -8,7 +8,15 @@ interface Display {
 
 /** What to tell the user about the connection, from the provider's snapshot. */
 export function describeConnection(snapshot: CollabSnapshot): Display {
-  const { state, synced, unsynced } = snapshot;
+  const { state, synced, unsynced, rejection } = snapshot;
+  // The server is refusing writes: it is connected, but nothing is being saved. Do not say "Syncing".
+  if (state === "connected" && rejection) {
+    return {
+      label: "Changes not saved",
+      detail: "See the message below.",
+      dot: "bg-red-700",
+    };
+  }
   if (state === "connected") {
     return synced
       ? { label: "Connected", detail: null, dot: "bg-emerald-600" }
@@ -43,7 +51,13 @@ export function ConnectionStatus({ snapshot }: { snapshot: CollabSnapshot }) {
       role="status"
       aria-live="polite"
       data-testid="connection-status"
-      data-state={snapshot.state === "connected" && !snapshot.synced ? "syncing" : snapshot.state}
+      data-state={
+        snapshot.state === "connected" && snapshot.rejection
+          ? "rejected"
+          : snapshot.state === "connected" && !snapshot.synced
+            ? "syncing"
+            : snapshot.state
+      }
       data-unsynced={snapshot.unsynced ? "true" : "false"}
       className="flex items-center gap-2 text-sm text-slate-900"
     >
