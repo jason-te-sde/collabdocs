@@ -169,6 +169,106 @@ describe("sign-in rate limits through the real route", () => {
     expect(jar.has("session-token")).toBe(false);
   });
 
+  /** A credentials sign-in with a body written by hand, as an attacker would send it. */
+  async function rawSignIn(
+    jar: Jar,
+    contentType: string,
+    body: (csrf: string) => string,
+    ip: string,
+  ): Promise<Response> {
+    const csrf = await csrfToken(jar);
+    const headers = new Headers({ "content-type": contentType, "x-forwarded-for": ip });
+    if (jar.header) headers.set("cookie", jar.header);
+    const response = await POST(
+      new NextRequest("http://localhost/api/auth/callback/credentials", {
+        method: "POST",
+        headers,
+        body: body(csrf),
+        redirect: "manual",
+      }),
+    );
+    jar.absorb(response);
+    return response;
+  }
+
+  async function useUpTheAccountLimit(): Promise<void> {
+    await register(jsonRequest("POST", { email: "ada@example.test", password: PASSWORD }));
+    for (let n = 1; n <= 3; n += 1) {
+      await signInWithPassword(new Jar(), "ada@example.test", `guess number ${n}!!`, {
+        "x-forwarded-for": `198.51.100.${n}`,
+      });
+    }
+  }
+
+  it("counts a JSON body against the account, and refuses it once the limit is used up", async () => {
+    await useUpTheAccountLimit();
+    const jar = new Jar();
+    const response = await rawSignIn(
+      jar,
+      "application/json",
+      (csrf) => JSON.stringify({ csrfToken: csrf, email: "ada@example.test", password: PASSWORD }),
+      "198.51.100.90",
+    );
+    expect(response.status).toBe(429);
+    expect(jar.has("session-token")).toBe(false);
+  });
+
+  it("counts JSON attempts too, so guessing with JSON bodies is limited", async () => {
+    await register(jsonRequest("POST", { email: "ada@example.test", password: PASSWORD }));
+    const guess = (n: number) =>
+      rawSignIn(
+        new Jar(),
+        "application/json",
+        (csrf) =>
+          JSON.stringify({
+            csrfToken: csrf,
+            email: "ada@example.test",
+            password: `wrong ${n}!!!!`,
+          }),
+        `198.51.100.${n}`,
+      );
+    for (let n = 1; n <= 3; n += 1) expect((await guess(n)).status).toBe(302);
+    expect((await guess(4)).status).toBe(429);
+  });
+
+  it("refuses a form that repeats a field, instead of counting one value and using another", async () => {
+    await useUpTheAccountLimit();
+    const jar = new Jar();
+    const response = await rawSignIn(
+      jar,
+      "application/x-www-form-urlencoded",
+      (csrf) =>
+        new URLSearchParams([
+          ["csrfToken", csrf],
+          ["email", "throwaway@example.test"],
+          ["email", "ada@example.test"],
+          ["password", PASSWORD],
+        ]).toString(),
+      "198.51.100.91",
+    );
+    expect(response.status).toBe(400);
+    expect(jar.has("session-token")).toBe(false);
+  });
+
+  it("refuses a body that is neither JSON nor a form, and an email that is not a string", async () => {
+    await register(jsonRequest("POST", { email: "ada@example.test", password: PASSWORD }));
+    const odd = await rawSignIn(
+      new Jar(),
+      "text/plain",
+      () => "email=ada@example.test",
+      "198.51.100.92",
+    );
+    expect(odd.status).toBe(415);
+    const array = await rawSignIn(
+      new Jar(),
+      "application/json",
+      (csrf) =>
+        JSON.stringify({ csrfToken: csrf, email: ["ada@example.test"], password: PASSWORD }),
+      "198.51.100.93",
+    );
+    expect(array.status).toBe(400);
+  });
+
   it("answers 429 once an address has had too many attempts, whichever accounts", async () => {
     const attempt = (n: number) =>
       signInWithPassword(new Jar(), `user${n}@example.test`, "whatever it is", {

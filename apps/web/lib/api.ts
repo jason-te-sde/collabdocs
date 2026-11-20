@@ -58,17 +58,20 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
   };
 }
 
-const MAX_BODY_BYTES = 16 * 1024;
+export const MAX_BODY_BYTES = 16 * 1024;
 
 /**
- * Reads the body as text, refusing with 413 once it passes `limit` bytes. It stops
- * reading at the limit instead of buffering a body of any size and measuring it after.
+ * Reads the body, refusing with 413 once it passes `limit` bytes. It stops reading at
+ * the limit instead of buffering a body of any size and measuring it after.
  */
-async function readCapped(request: Request, limit: number): Promise<string> {
+export async function readCappedBytes(
+  request: Request,
+  limit: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   const tooLarge = () => new HttpError(413, "payload_too_large", "The body is too large");
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) throw tooLarge();
-  if (!request.body) return "";
+  if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -82,7 +85,11 @@ async function readCapped(request: Request, limit: number): Promise<string> {
     }
     chunks.push(value);
   }
-  return new TextDecoder().decode(Buffer.concat(chunks));
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+async function readCapped(request: Request, limit: number): Promise<string> {
+  return new TextDecoder().decode(await readCappedBytes(request, limit));
 }
 
 /** Reads and validates a JSON body. Requires the JSON content type, which a cross-site form cannot send. */
