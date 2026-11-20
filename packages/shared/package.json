@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Types, the permission rules and the collaboration token verifier, used by the web app and the collab server.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./permissions": "./src/permissions.ts",
+    "./collab-protocol": "./src/collab-protocol.ts"
   },
   "scripts": {
     "lint": "eslint .",
