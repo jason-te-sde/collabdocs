@@ -94,9 +94,9 @@ test("remote cursors, selections and presence appear with the user's name", asyn
     owner.page.locator(".collaboration-carets__label", { hasText: "Wren" }),
   ).toBeVisible();
 
-  // Wren selects the last word; Olive sees it highlighted.
+  // Wren selects the last few characters; Olive sees them highlighted.
   await moveToEnd(writer.page);
-  await writer.page.keyboard.press("Shift+Alt+ArrowLeft");
+  for (let i = 0; i < 4; i++) await writer.page.keyboard.press("Shift+ArrowLeft");
   await expect(owner.page.locator(".ProseMirror-yjs-selection").first()).toBeVisible();
 
   await writer.context.close();
