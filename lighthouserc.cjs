@@ -1,5 +1,6 @@
 // Lighthouse CI: performance and accessibility must each be at least 0.92 on
-// the median of three runs, on three pages, against a production build with the
+// the median of three runs, on three pages, for the desktop preset and for the
+// mobile emulation (LH_FORM_FACTOR=mobile), against a production build with the
 // collab server, PostgreSQL and Redis running (see the lighthouse job in
 // .github/workflows/ci.yml, which starts them and runs scripts/lighthouse/seed.mjs).
 const { existsSync, readFileSync } = require("node:fs");

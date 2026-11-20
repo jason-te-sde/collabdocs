@@ -4,25 +4,25 @@ A real-time collaborative document editor: Yjs over Socket.IO, live cursors and 
 
 ## Status
 
-Version 0.1 is in progress, task by task. Done so far (J-T1 to J-T3):
+Version 0.1 is nearly complete. Built:
 
 - an npm workspaces monorepo: `apps/web` (Next.js, App Router), `apps/collab` (the collab server) and `packages/shared`;
 - the PostgreSQL schema and migrations, with the ownership and membership rules enforced by the database;
-- sign-in with GitHub OAuth and with email and password (Auth.js);
+- sign-in with GitHub OAuth and with email and password (Auth.js), email verification, rate limits;
 - the role model (`owner`, `editor`, `viewer`), `can(role, action)`, and the REST routes for documents and memberships, each checking the session and the role;
 - the signed, short-lived collaboration token that the socket server requires;
 - the collab server: Yjs sync and awareness over Socket.IO, a role check on every event, persistence (an update log compacted into snapshots), several instances behind Redis, and configurable limits;
 - the editor: TipTap bound to a Yjs document, remote cursors and a presence list, a connection indicator, read-only mode for viewers, edits kept in IndexedDB and merged on reconnect, pages for sign-in, the document list and sharing (Tailwind and Radix UI);
-- Playwright end-to-end tests with two or three real browsers;
-- CI.
+- Playwright end-to-end tests with two or three real browsers, and an axe-core accessibility check on the pages;
+- CI, including a Lighthouse gate (performance and accessibility of at least 0.92).
 
-Not built yet: the load tests (J-T4) and the Lighthouse gate (J-T5).
+Not done yet: the sync-latency load test ([Performance](#performance)) and the public release.
 
 ## The editor
 
-![Three people in one document: Ada's page shows Grace's selection and Linus's cursor with their names](docs/images/editor-two-cursors.png)
+![Ada's browser, with Grace's selection and Linus's cursor shown live, each with a name, and the presence list naming all three](docs/images/editor-two-cursors.png)
 
-The screenshot is Ada's view. Grace has a word selected and Linus has his cursor at the end of the last line; both appear live, in their own colour, with their name, and the presence list above the text names everyone in the document.
+The screenshot is Ada's browser, one of three Playwright browsers in the same document. Grace has a word selected and Linus has his cursor at the end of the last line; both appear live, in their own colour, with their name, and the presence list above the text names everyone in the document. The screenshots are regenerated with `SCREENSHOTS=1 npm run test:e2e -- screenshots`.
 
 | Sharing                                                                                                        | Offline                                                                                                                              |
 | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -35,12 +35,44 @@ The screenshot is Ada's view. Grace has a word selected and Linus has his cursor
 
 ## Goals
 
-The project is built to deliver four things. They are goals, **not yet measured**; each gets a test or a benchmark, and the numbers go here when they exist.
+The project is built to deliver four things. Goals 1 and 2 are **not yet measured**: each gets a benchmark, and the numbers go in [Performance](#performance) when they exist. Goals 3 and 4 have tests that run in CI.
 
 1. Yjs CRDT sync over Socket.IO with a latency under 100 ms. Defined as: with 50 editors on loopback, the p95 of the time from one client's write to every other client applying it.
 2. 50 or more people editing one document at once, with live cursors and presence (the Yjs awareness protocol).
 3. Every route and every WebSocket event protected, with OAuth and password sign-in and role-based permissions. Both halves are done and tested: the REST routes and the socket server.
-4. Lighthouse performance and accessibility of 92 or more, with Tailwind and Radix UI, enforced in CI.
+4. Lighthouse performance and accessibility of 92 or more, with Tailwind and Radix UI, enforced in CI. Done: see [Lighthouse](#lighthouse).
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI["TipTap editor + Yjs doc<br/>(IndexedDB copy)"]
+  end
+  subgraph Web["apps/web (Next.js)"]
+    Pages["Pages, Auth.js sessions"]
+    API["REST API: documents, memberships,<br/>collab-token"]
+  end
+  subgraph Collab["apps/collab (Socket.IO), one or more instances"]
+    Sock["Handshake: token + membership<br/>Every event: can(role, action)"]
+    Mem["Y.Doc per open document"]
+  end
+  PG[("PostgreSQL<br/>users, documents, memberships,<br/>update log, snapshots")]
+  RD[("Redis<br/>signed relay, membership messages,<br/>connection counters, rate limits")]
+
+  UI -- "HTTPS: pages, REST" --> Pages
+  UI -- "HTTPS" --> API
+  UI == "WebSocket: sync + awareness<br/>(y-protocols)" ==> Sock
+  API -- "signed 5-minute token" --> UI
+  API --> PG
+  API -- "membership changes (HMAC)" --> RD
+  Sock --> Mem
+  Mem -- "append update, compact into snapshot" --> PG
+  Sock -- "membership lookup" --> PG
+  Mem <-- "relay frames (HMAC)" --> RD
+```
+
+The browser gets a page and a collaboration token from the web app, then opens one Socket.IO connection per document to the collab server. The server checks the token and the membership in the database when the socket connects, and the role again on every message. An accepted update is applied to the server's copy of the document, appended to the update log in PostgreSQL, and only then relayed to the other sockets and, through Redis, to the other collab instances. Why each piece is the way it is: [docs/design](docs/design) (0001 monorepo and Socket.IO, 0002 roles and tokens, 0003 the collab server, 0004 the editor client, 0005 y-protocols over Socket.IO, 0006 the update log and snapshots, 0007 the Redis relay and its trust model).
 
 ## Layout
 
@@ -55,23 +87,25 @@ The project is built to deliver four things. They are goals, **not yet measured*
 
 The workspaces are managed with **npm workspaces**, not pnpm: the machine this was built on has neither pnpm nor corepack, and nothing here needs more than npm offers.
 
-## Local setup
+## Run it locally
 
-You need Node 22.12 or newer, PostgreSQL 15 or newer and Redis. On macOS with Homebrew:
+You need Node 22.12 or newer and either Docker or your own PostgreSQL 15+ and Redis.
 
 ```sh
-brew install postgresql@17 redis      # skip what you have
-brew services start postgresql@17
-brew services start redis             # the collab server and its tests
-
-createdb collabdocs
-createdb collabdocs_test              # the tests delete every row; the name must contain "test"
-
+docker compose up -d                  # PostgreSQL 17 and Redis 7; creates collabdocs and collabdocs_test
 npm install
 cp apps/web/.env.example apps/web/.env
 ```
 
-Edit `apps/web/.env`: set `DATABASE_URL` (include your user name if PostgreSQL has no `postgres` role, for example `postgresql://you@localhost:5432/collabdocs`), and generate two different secrets with `openssl rand -base64 32` for `AUTH_SECRET` and `COLLAB_TOKEN_SECRET`. GitHub sign-in appears only when `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` are set; create an OAuth app with the callback URL `http://localhost:3000/api/auth/callback/github`. Password sign-in works without them. In development the verification mail is printed in the terminal that runs the web app (`MAIL_TRANSPORT=console`, the default outside production); see [SECURITY.md](SECURITY.md) for plugging in a real mail provider.
+Without Docker, on macOS with Homebrew: `brew install postgresql@17 redis`, start both with `brew services start`, then `createdb collabdocs` and `createdb collabdocs_test` (the tests delete every row; the name must contain "test").
+
+Edit `apps/web/.env`:
+
+- `DATABASE_URL`: `postgresql://collabdocs:collabdocs@localhost:5432/collabdocs` with the compose file (the credentials are for a database on your own machine);
+- `REDIS_URL`: `redis://localhost:6379`;
+- `AUTH_SECRET`, `COLLAB_TOKEN_SECRET` and `REDIS_MESSAGE_SECRET`: three different values, each from `openssl rand -base64 32`. `REDIS_MESSAGE_SECRET` is required whenever `REDIS_URL` is set; the apps refuse to start without it.
+
+GitHub sign-in appears only when `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` are set; create an OAuth app with the callback URL `http://localhost:3000/api/auth/callback/github`. Password sign-in works without them. In development the verification mail is printed in the terminal that runs the web app (`MAIL_TRANSPORT=console`, the default outside production); see [SECURITY.md](SECURITY.md) for plugging in a real mail provider. Every variable is described in [docs/operations.md](docs/operations.md).
 
 ```sh
 npm run db:deploy                     # apply the migrations
@@ -92,7 +126,7 @@ Sign in at `http://localhost:3000/api/auth/signin`, then call the routes below w
 ## Running the collab server
 
 ```sh
-export DATABASE_URL=postgresql://you@localhost:5432/collabdocs
+export DATABASE_URL=postgresql://collabdocs:collabdocs@localhost:5432/collabdocs
 export REDIS_URL=redis://localhost:6379          # optional: without it the server runs alone
 export COLLAB_TOKEN_SECRET=...                   # the same value the web app uses
 export REDIS_MESSAGE_SECRET=...                  # required with REDIS_URL; the same value the web app uses
@@ -101,7 +135,9 @@ npm run start -w apps/collab                     # listens on :4000, GET /health
 
 The web app asks for a token (`POST /api/documents/:id/collab-token`) and the client connects with `io("http://localhost:4000", { auth: { token, documentId } })`, then speaks the y-protocols sync and awareness messages in the `sync` and `awareness` events (see [0003](docs/design/0003-collab-server.md)). To run two instances behind Redis, start a second one with another `COLLAB_PORT`; they share documents through Redis and the database, and put a load balancer in front.
 
-Everything is configured by environment variables; the defaults are the ones in the table.
+## Limits
+
+Everything the collab server limits is an environment variable; the defaults are in the table, and [docs/operations.md](docs/operations.md) says what happens past each one and when to change it. Every limit has a test. The web app's account limits (sign-in, registration, invitations) are in [SECURITY.md](SECURITY.md).
 
 | Variable                                | Default   | Meaning                                                          |
 | --------------------------------------- | --------- | ---------------------------------------------------------------- |
@@ -136,6 +172,10 @@ Everything is configured by environment variables; the defaults are the ones in 
 | `COLLAB_MEMBERSHIP_RECHECK_MS`          | 60000     | how often sockets are checked against the `Membership` table     |
 | `COLLAB_ROLE_CACHE_MS`                  | 1000      | a socket's role is read again before a write if older than this  |
 
+## Security model
+
+Every REST route checks the session and the role; the collab server verifies a signed 5-minute token and the database membership when a socket connects, and `can(role, action)` on every event after that, so a viewer cannot write and a removed member stops writing within about a second. A caller who is not a member of a document gets the same 404 as for a document that does not exist. Passwords are hashed with argon2id, sign-in and registration are rate limited, invitations and registration answer the same for every address, and messages on Redis are signed so that access to Redis alone cannot inject an update or disconnect a user. What is left, by design, is listed in the "Known limits" section. The full model: [SECURITY.md](SECURITY.md).
+
 ## Tests and checks
 
 ```sh
@@ -164,7 +204,8 @@ The tests drive two or three browser contexts at once (owner, editor, viewer) ag
 - one context goes offline (`context.setOffline(true)`), both keep typing, it returns, and each side's characters are all there, in order, with none added;
 - edits made while the server is unreachable survive a reload and sync afterwards;
 - a removed member is disconnected and loses the page and the local copy; a demoted editor becomes read-only without a reload;
-- registration, sign-in, creating, renaming and sharing through the pages.
+- registration, sign-in, creating, renaming and sharing through the pages;
+- axe-core (`@axe-core/playwright`) on the sign-in page, the document list, the editor with another person's cursor in it, and the open share dialog: any serious or critical violation fails the test.
 
 The README's screenshots are produced by `SCREENSHOTS=1 npm run test:e2e -- screenshots`.
 

@@ -166,9 +166,10 @@ jobs:
           retention-days: 7
 
   # Lighthouse CI: a production build, the collab server, PostgreSQL and Redis,
-  # three pages (sign-in, the document list, the editor), desktop preset, three
-  # runs each. Performance and accessibility must each be at least 0.92 on the
-  # median, or this job fails. The scores in the README come from a run of this job.
+  # three pages (sign-in, the document list, the editor), three runs each, once
+  # with the desktop preset and once with Lighthouse's default mobile emulation.
+  # Performance and accessibility must each be at least 0.92 on the median, in
+  # both, or this job fails. The scores in the README come from a run of this job.
   lighthouse:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -239,8 +240,7 @@ jobs:
       - name: Keep the desktop reports
         if: always()
         run: mv .lighthouseci .lighthouseci-desktop
-      - name: Lighthouse, mobile emulation (not gated; reported in the README)
-        continue-on-error: true
+      - name: Lighthouse (median of three runs, mobile emulation)
         env:
           LH_FORM_FACTOR: mobile
         run: npx lhci autorun --config=./lighthouserc.cjs
@@ -252,7 +252,6 @@ jobs:
         run: node scripts/lighthouse/summarize.mjs .lighthouseci-desktop
       - name: Median scores per page, mobile
         if: always()
-        continue-on-error: true
         run: node scripts/lighthouse/summarize.mjs .lighthouseci-mobile
       - name: Server logs
         if: failure()
