@@ -2,12 +2,13 @@
 
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCaret from "@tiptap/extension-collaboration-caret";
-import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
+import { Editor, EditorContent, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui";
 import { renderCaret } from "@/lib/collab/caret";
 import { userColor } from "@/lib/collab/identity";
+import { yieldToMain } from "@/lib/collab/schedule";
 import type { CollabProvider } from "@/lib/collab/provider";
 import type { CollabSession } from "@/lib/collab/session";
 
@@ -27,33 +28,68 @@ export interface EditorSurfaceProps {
   provider: CollabProvider;
 }
 
+/**
+ * Builds the editor in two tasks of its own, away from React's render and commit: first the
+ * schema, plugins and state (`new Editor` with no element), then the view (`mount`). The
+ * default `useEditor` does both inside one effect, together with the commit that follows.
+ */
+function useCollabEditor(
+  session: CollabSession,
+  user: EditorUser,
+  provider: CollabProvider,
+  color: string,
+  readOnly: boolean,
+): Editor | null {
+  const [editor, setEditor] = useState<Editor | null>(null);
+  // The value at the first render; a later change is applied by the effect in EditorSurface.
+  const readOnlyAtStart = useRef(readOnly);
+
+  useEffect(() => {
+    let cancelled = false;
+    let created: Editor | null = null;
+    void (async () => {
+      await yieldToMain();
+      if (cancelled) return;
+      created = new Editor({
+        element: null,
+        editable: !readOnlyAtStart.current,
+        extensions: [
+          // The Collaboration extension brings its own undo and redo, which must
+          // only undo this user's changes; the history extension would undo everyone's.
+          StarterKit.configure({ undoRedo: false }),
+          Collaboration.configure({ document: session.doc }),
+          CollaborationCaret.configure({
+            provider,
+            user: { id: user.id, name: user.name, color },
+            render: renderCaret,
+          }),
+        ],
+        editorProps: {
+          attributes: {
+            role: "textbox",
+            "aria-label": "Document body",
+            "aria-multiline": "true",
+          },
+        },
+      });
+      await yieldToMain();
+      if (cancelled) return;
+      created.mount(document.createElement("div"));
+      setEditor(created);
+    })();
+    return () => {
+      cancelled = true;
+      created?.destroy();
+      setEditor(null);
+    };
+  }, [session, provider, user.id, user.name, color]);
+
+  return editor;
+}
+
 export function EditorSurface({ session, user, readOnly, provider }: EditorSurfaceProps) {
   const color = useMemo(() => userColor(user.id), [user.id]);
-  const editor = useEditor(
-    {
-      immediatelyRender: false,
-      editable: !readOnly,
-      extensions: [
-        // The Collaboration extension brings its own undo and redo, which must
-        // only undo this user's changes; the history extension would undo everyone's.
-        StarterKit.configure({ undoRedo: false }),
-        Collaboration.configure({ document: session.doc }),
-        CollaborationCaret.configure({
-          provider,
-          user: { id: user.id, name: user.name, color },
-          render: renderCaret,
-        }),
-      ],
-      editorProps: {
-        attributes: {
-          role: "textbox",
-          "aria-label": "Document body",
-          "aria-multiline": "true",
-        },
-      },
-    },
-    [session, user.id, user.name, color],
-  );
+  const editor = useCollabEditor(session, user, provider, color, readOnly);
 
   useEffect(() => {
     if (editor && editor.isEditable === readOnly) editor.setEditable(!readOnly);
