@@ -74,6 +74,27 @@ flowchart LR
 
 The browser gets a page and a collaboration token from the web app, then opens one Socket.IO connection per document to the collab server. The server checks the token and the membership in the database when the socket connects, and the role again on every message. An accepted update is applied to the server's copy of the document, appended to the update log in PostgreSQL, and only then relayed to the other sockets and, through Redis, to the other collab instances. Why each piece is the way it is: [docs/design](docs/design) (0001 monorepo and Socket.IO, 0002 roles and tokens, 0003 the collab server, 0004 the editor client, 0005 y-protocols over Socket.IO, 0006 the update log and snapshots, 0007 the Redis relay and its trust model).
 
+## Lighthouse
+
+CI fails when performance or accessibility is below 0.92 on any of three pages. Scores below are the **median of three runs** from the `lighthouse` job of CI run [44790993576](https://github.com/jason-te-sde/collabdocs/actions/runs/44790993576), measured with Lighthouse 13.6.0 and Chrome on a GitHub-hosted `ubuntu-24.04` runner.
+
+| Page                                         | Preset  | Performance | Accessibility | LCP     | TBT    | CLS   |
+| -------------------------------------------- | ------- | ----------- | ------------- | ------- | ------ | ----- |
+| Sign-in (`/sign-in`, signed out)             | desktop | 1.00        | 1.00          | 177 ms  | 0 ms   | 0.000 |
+| Document list (`/documents`, signed in)      | desktop | 1.00        | 1.00          | 281 ms  | 0 ms   | 0.000 |
+| Editor (`/documents/:id`, signed in, seeded) | desktop | 1.00        | 1.00          | 335 ms  | 0 ms   | 0.018 |
+| Sign-in (`/sign-in`, signed out)             | mobile  | 1.00        | 1.00          | 656 ms  | 82 ms  | 0.000 |
+| Document list (`/documents`, signed in)      | mobile  | 0.99        | 1.00          | 982 ms  | 104 ms | 0.000 |
+| Editor (`/documents/:id`, signed in, seeded) | mobile  | 0.98        | 1.00          | 1281 ms | 178 ms | 0.037 |
+
+Conditions: a production build (`next build` and `next start`), the collab server, PostgreSQL 17 and Redis 7 running on the same runner, signed in as a verified user for the document list and the editor (a session cookie from `scripts/lighthouse/seed.mjs`, set by a Puppeteer script), the editor opened on a seeded document that holds five paragraphs, Lighthouse's default simulated throttling. **The gate is applied to the desktop preset and to the mobile emulation**: both pass, so both are enforced. Performance, accessibility and these conditions are in [`lighthouserc.cjs`](lighthouserc.cjs) and the `lighthouse` job of [`.github/workflows/ci.yml`](.github/workflows/ci.yml); the reports are the job's `lighthouse-reports` artifact. These scores describe a local, same-host server: the network between browser and server is not in them, and the editor page is measured with its socket connected but with nobody else in the document.
+
+The scores are taken from CI, not from a laptop, because they depend on the machine. Accessibility is also checked, with axe-core, in the end-to-end suite (above).
+
+## Performance
+
+_This section is filled in by the sync-latency load test (J-T4). No numbers are claimed until it has run._
+
 ## Layout
 
 | Path              | What it is                                                                    |
