@@ -11,7 +11,8 @@ import {
   resetDb,
   waitFor,
 } from "./support";
-import { engineConnections } from "../src/outbound";
+import { DEFAULT_LIMITS } from "../src/config";
+import { engineConnections, queuedPackets } from "../src/outbound";
 
 beforeEach(resetDb);
 afterEach(cleanup);
@@ -63,16 +64,19 @@ describe("COLLAB_CORS_ORIGIN is enforced on the WebSocket upgrade too", () => {
     ]);
   });
 
-  it("refuses a polling request from another origin as well", async () => {
-    const server = await launch({ corsOrigin: "http://localhost:3000" });
+  it("accepts WebSocket only: a polling handshake is refused, a WebSocket client connects", async () => {
+    // A polling answer is handed to the HTTP layer at once, where the server cannot see what
+    // a client that does not read leaves queued, so it is not offered.
+    const server = await launch();
     const f = await createDocument();
     const token = await mintToken(f.documentId, f.users.editor!, "editor");
-    expect(
-      await open(server.port, f.documentId, token, {
-        origin: "https://evil.example",
-        transport: "polling",
-      }),
-    ).toBe("refused");
+    const polling = await fetch(
+      `http://127.0.0.1:${server.port}/socket.io/?EIO=4&transport=polling`,
+    );
+    expect(polling.status).toBe(400);
+    expect(await open(server.port, f.documentId, token, { transport: "polling" })).toBe("refused");
+    expect(await open(server.port, f.documentId, token)).toBe("connected");
+    expect(engineConnections(server.io.engine).length).toBeLessThanOrEqual(1);
   });
 
   it("with no origin configured, allows only the server's own origin", async () => {
@@ -119,16 +123,13 @@ describe("events other than sync and awareness", () => {
 interface RawEngine {
   send(data: string): void;
   _sendPacket(type: string): void;
-  transport: { ws?: { _socket: { pause(): void } }; doPoll?: () => void };
+  transport: { ws?: { _socket: { pause(): void } } };
 }
 
 /** Opens an Engine.IO connection and nothing else: no namespace, no token. */
-async function rawConnection(
-  port: number,
-  transport: "websocket" | "polling" = "websocket",
-): Promise<{ engine: RawEngine; close(): void }> {
+async function rawConnection(port: number): Promise<{ engine: RawEngine; close(): void }> {
   const manager = new Manager(`http://127.0.0.1:${port}`, {
-    transports: [transport],
+    transports: ["websocket"],
     upgrade: false,
     reconnection: false,
     autoConnect: false,
@@ -228,25 +229,22 @@ describe("connections that belong to no document", () => {
     raw.close();
   });
 
-  it("closes a connection that is over the queue cap and has joined nothing", async () => {
-    const server = await launch();
-    const raw = await rawConnection(server.port, "polling");
+  it("closes a connection that is over the packet cap, has stopped reading and has joined nothing", async () => {
+    // The byte cap is out of the way, so only the packet count can be what the sweep sees.
+    const server = await launch({ limits: { maxOutboundBytes: 1_000_000_000 } });
+    const raw = await rawConnection(server.port);
+    stopReading(raw.engine);
     await waitFor(() => open(server) === 1, "the connection to be registered");
-    const conn = engineConnections(server.io.engine)[0] as { send(data: string): void };
-    // From here the client sends no more poll requests: what the server queues stays queued.
-    // A poll may be waiting at the server; one packet answers it, and the next poll is the
-    // one that never happens.
-    let stalled = false;
-    raw.engine.transport.doPoll = () => {
-      stalled = true;
-    };
-    conn.send("0");
-    await waitFor(() => stalled, "the client to stop polling");
+    const conn = engineConnections(server.io.engine)[0] as { send(data: string | Buffer): void };
+    // One message larger than the operating system's buffers holds the transport; what is sent
+    // after it waits in Engine.IO's write buffer, a real queue of 20,000 packets.
+    conn.send(Buffer.alloc(20_000_000));
     for (let i = 0; i < 20_000; i += 1) conn.send("0");
-    await waitFor(() => open(server) === 0, "the sweep to close the connection", 2000);
-    expect(server.logs.find("outbound queue over the cap; closing the connection")).toEqual([
-      expect.objectContaining({ queuedPackets: expect.any(Number) }),
-    ]);
+    expect(queuedPackets(conn)).toBeGreaterThan(DEFAULT_LIMITS.maxOutboundPackets);
+    await waitFor(() => open(server) === 0, "the sweep to close the connection", 4000);
+    expect(
+      server.logs.find("outbound queue over the cap and not draining; closing the connection"),
+    ).toEqual([expect.objectContaining({ queuedPackets: expect.any(Number) })]);
     raw.close();
   });
 });

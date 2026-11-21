@@ -1,6 +1,12 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { dropConnection, guardConnection, queuedBytes, queuedPackets } from "../src/outbound";
+import {
+  dropConnection,
+  guardConnection,
+  queuedBytes,
+  queuedPackets,
+  stalledOverCap,
+} from "../src/outbound";
 import { connectNamespace } from "../src/server";
 
 /**
@@ -16,7 +22,9 @@ function fakeConnection() {
       return Reflect.get(target, key, receiver) as unknown;
     },
   });
-  const transport = { socket: { bufferedAmount: 0, terminate: () => {} } };
+  const transport = {
+    socket: { bufferedAmount: 0, terminate: () => {}, _socket: { _handle: { writeQueueSize: 0 } } },
+  };
   const conn = Object.assign(new EventEmitter(), { writeBuffer, transport });
   guardConnection(conn, () => {});
   return {
@@ -102,5 +110,67 @@ describe("the namespace a CONNECT packet names", () => {
     expect(connectNamespace('2["sync"]')).toBeNull();
     expect(connectNamespace("1/x,")).toBeNull();
     expect(connectNamespace("")).toBeNull();
+  });
+});
+
+describe("a connection that is over a cap and not draining", () => {
+  /** A connection whose queue is whatever the test sets, for the sweep to look at. */
+  function queued() {
+    const c = fakeConnection();
+    return {
+      conn: c.conn,
+      setBytes(bytes: number) {
+        c.transport.socket.bufferedAmount = bytes;
+      },
+      setPending(pending: number) {
+        c.transport.socket._socket._handle.writeQueueSize = pending;
+      },
+    };
+  }
+
+  it("is left alone while its queue shrinks between sweeps, however long it is over the cap", () => {
+    const q = queued();
+    for (const bytes of [14_000_000, 11_000_000, 8_000_000, 5_000_000, 3_000_000]) {
+      q.setBytes(bytes);
+      expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    }
+  });
+
+  it("is stalled at the second sweep over the cap in which the queue has not shrunk", () => {
+    const q = queued();
+    q.setBytes(14_000_000);
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(true);
+  });
+
+  it("is left alone while the kernel keeps taking bytes, though a message still being written counts in full", () => {
+    // A WebSocket reports a message it is writing as queued in full until its last byte is out.
+    const q = queued();
+    q.setBytes(14_000_000);
+    q.setPending(14_000_000);
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    for (const pending of [11_000_000, 8_000_000, 5_000_000]) {
+      q.setPending(pending);
+      expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    }
+    // The kernel stops taking bytes: the next sweep finds it stalled.
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(true);
+  });
+
+  it("is stalled when the queue grows, and not when it was under the cap at the sweep before", () => {
+    const q = queued();
+    q.setBytes(1_000_000);
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    q.setBytes(9_000_000);
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    q.setBytes(9_500_000);
+    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(true);
+  });
+
+  it("counts packets the same way", () => {
+    const c = fakeConnection();
+    for (let i = 0; i < 50; i += 1) c.queue("a");
+    expect(stalledOverCap(c.conn, 1_000_000, 10)).toBe(false);
+    expect(stalledOverCap(c.conn, 1_000_000, 10)).toBe(true);
   });
 });

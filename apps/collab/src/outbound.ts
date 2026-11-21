@@ -4,14 +4,22 @@ import type { CollabSocket } from "./types";
 /**
  * What Engine.IO keeps for one client that has not been written out yet. Neither field is
  * part of Engine.IO's typed interface; both are read defensively, so a transport that has
- * no such field (long polling) counts as nothing queued beyond the write buffer.
+ * no such field counts as nothing queued beyond the write buffer.
  */
 interface EngineInternals {
   /** Packets waiting for the transport to be free. Only its length is ever read here. */
   writeBuffer?: unknown[];
   transport?: {
     /** For the WebSocket transport, the `ws` socket. */
-    socket?: { bufferedAmount?: number; terminate?: () => void };
+    socket?: {
+      bufferedAmount?: number;
+      terminate?: () => void;
+      /**
+       * The TCP socket under the WebSocket. The bytes in its handle's write queue are the
+       * ones the kernel has not accepted yet, and they shrink as the client reads.
+       */
+      _socket?: { _handle?: { writeQueueSize?: number } };
+    };
   };
   /** What Engine.IO itself runs when a transport closes. */
   onClose?: (reason: string) => void;
@@ -76,6 +84,48 @@ export function queuedBytes(conn: unknown): number {
 /** Packets in the connection's write buffer, not yet handed to the transport. Constant time. */
 export function queuedPackets(conn: unknown): number {
   return internals(conn).writeBuffer?.length ?? 0;
+}
+
+/** What the last sweep saw of a connection. */
+interface SweepSample {
+  bytes: number;
+  packets: number;
+  /** Bytes the kernel has not accepted yet, if the transport can say. */
+  pending: number | undefined;
+  overBytes: boolean;
+  overPackets: boolean;
+}
+const lastSweep = new WeakMap<object, SweepSample>();
+
+/**
+ * For the periodic sweep: whether a connection is over a cap and not draining. It is when,
+ * at this sweep and at the one before, the same measure (bytes or packets) was over its
+ * cap, and nothing was taken since: the bytes the kernel has not accepted (the write queue
+ * of the TCP socket's handle) did not shrink and the queue has not shrunk. `bufferedAmount`
+ * alone cannot show a download in progress, because a WebSocket counts a message it is
+ * still writing in full until its last byte is out; the handle's write queue shrinks as the
+ * client reads. A client that is taking a
+ * large reply is left alone however long that takes; one that has stopped reading is
+ * closed at its second sweep over the cap. Call it once per sweep per connection: it
+ * remembers what it saw.
+ */
+export function stalledOverCap(conn: unknown, maxBytes: number, maxPackets: number): boolean {
+  const key = conn as object;
+  const bytes = queuedBytes(conn);
+  const packets = queuedPackets(conn);
+  const pending = internals(conn).transport?.socket?._socket?._handle?.writeQueueSize;
+  const before = lastSweep.get(key);
+  const overBytes = bytes > maxBytes;
+  const overPackets = packets > maxPackets;
+  lastSweep.set(key, { bytes, packets, pending, overBytes, overPackets });
+  if (!before) return false;
+  if (pending !== undefined && before.pending !== undefined && pending < before.pending) {
+    return false;
+  }
+  return (
+    (overBytes && before.overBytes && bytes >= before.bytes) ||
+    (overPackets && before.overPackets && packets >= before.packets)
+  );
 }
 
 /** `queuedBytes` for the connection of a Socket.IO socket. */

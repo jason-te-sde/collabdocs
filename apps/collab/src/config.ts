@@ -44,10 +44,12 @@ export interface Limits {
   maxAwarenessBytes: number;
   /**
    * The most bytes the server may hold queued for one connection, that the client has not
-   * taken. Checked in constant time before a broadcast or a reply to a socket, and by a
-   * periodic sweep over every connection; a connection over it is closed. One message is
-   * added to a queue after the check, so a queue can reach this plus one message (a reply
-   * for a document, at most `maxDocumentBytes`).
+   * taken, when the client is not draining the queue. A periodic sweep over every
+   * connection closes one that is over it at two sweeps in a row without having shrunk, so
+   * a client reading a large reply at any real rate is not closed however long it takes,
+   * and one that has stopped reading is closed within about a second. A sync reply is not
+   * queued for a connection already over it, and a broadcast closes a connection at once
+   * when it is over it by more than `maxDocumentBytes`, the most one reply can add.
    */
   maxOutboundBytes: number;
   /**

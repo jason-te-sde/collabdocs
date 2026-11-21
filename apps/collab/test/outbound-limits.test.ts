@@ -1,5 +1,3 @@
-import type { Role } from "@collabdocs/shared";
-import { io as connect, type Socket } from "socket.io-client";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS } from "../src/config";
 import { bufferedBytes } from "../src/outbound";
@@ -9,23 +7,16 @@ import {
   closeDb,
   createDocument,
   launch,
-  mintToken,
   resetDb,
   settle,
   snapshotRows,
   storedText,
   updateRows,
   waitFor,
-  type Fixture,
 } from "./support";
-
-const stalledClients: Socket[] = [];
 
 beforeEach(resetDb);
 afterEach(cleanup);
-afterEach(() => {
-  for (const socket of stalledClients.splice(0)) socket.close();
-});
 afterAll(closeDb);
 
 /** Stops the client's TCP socket from reading: what the server sends to it stays queued. */
@@ -46,41 +37,13 @@ function serverSideOf(server: Launched, userId: string) {
 }
 
 /**
- * A member whose client connects over long polling and then never polls again. Nothing is
- * in the operating system's buffers for such a client: every packet the server has for it
- * stays in Engine.IO's write buffer, so the queue the server acts on is a real one.
+ * Queues 20 MB for a socket whose client has stopped reading. One message larger than the
+ * operating system's buffers: the WebSocket counts a write that has not finished in full, so
+ * the queue the server acts on is the real one, not a stand-in.
  */
-async function connectStalled(
-  server: Launched,
-  fixture: Fixture,
-  who: string,
-  role: Role,
-): Promise<Socket> {
-  const token = await mintToken(fixture.documentId, fixture.users[who]!, role, { name: who });
-  const socket = connect(`http://127.0.0.1:${server.port}`, {
-    auth: { token, documentId: fixture.documentId },
-    transports: ["polling"],
-    upgrade: false,
-    reconnection: false,
-    forceNew: true,
-  });
-  stalledClients.push(socket);
-  let stalled = false;
-  await new Promise<void>((resolve, reject) => {
-    socket.on("connect", () => {
-      (socket.io.engine as unknown as { transport: { doPoll: () => void } }).transport.doPoll =
-        () => {
-          stalled = true;
-        };
-      resolve();
-    });
-    socket.on("connect_error", reject);
-  });
-  // A poll may already be waiting at the server. One packet answers it; the client then asks
-  // for the next poll, which it does not make. From then on nothing is taken from the server.
-  serverSideOf(server, fixture.users[who]!).emit("sync", new Uint8Array(1));
-  await waitFor(() => stalled, "the client to stop polling");
-  return socket;
+function stuff(serverSide: ReturnType<typeof serverSideOf>): void {
+  serverSide.emit("sync", new Uint8Array(20_000_000));
+  expect(bufferedBytes(serverSide)).toBeGreaterThan(DEFAULT_LIMITS.maxOutboundBytes);
 }
 
 /** A document of `size` bytes of text, written by its owner and stored. */
@@ -175,31 +138,47 @@ describe("what the server queues for a socket is bounded", () => {
   });
 
   it("disconnects a socket that is not taking broadcasts while another member writes", async () => {
-    const server = await launch({ limits: { maxOutboundBytes: 300_000 } });
+    // A broadcast closes a socket at once past the cap plus a whole document (here 1.1 MB).
+    const server = await launch({
+      limits: { maxOutboundBytes: 100_000, maxDocumentBytes: 1_000_000 },
+    });
     const f = await createDocument();
     const owner = await TestClient.connect(server, f, "owner", "owner");
     const editor = await TestClient.connect(server, f, "editor", "editor");
     const viewer = await TestClient.connect(server, f, "viewer", "viewer");
     stopReading(viewer);
     const serverSide = serverSideOf(server, f.users.viewer!);
-    // A kernel send buffer large enough to swallow a test's traffic would hide the problem on
-    // some machines, so the transport is made to report what a stalled client leaves behind:
-    // ten megabytes accepted by the WebSocket and not handed to the operating system.
-    const transport = (serverSide.conn as unknown as { transport: { socket: object } }).transport;
-    Object.defineProperty(transport.socket, "bufferedAmount", { get: () => 10_000_000 });
-    expect(bufferedBytes(serverSide)).toBeGreaterThanOrEqual(10_000_000);
+    stuff(serverSide);
 
     owner.append("written while the viewer is stalled");
     await waitFor(() => !serverSide.connected, "the stalled viewer to be disconnected", 2000);
     expect(server.logs.find("outbound queue over the cap; disconnecting")).toEqual([
       expect.objectContaining({ userId: f.users.viewer }),
     ]);
+    expect(
+      server.logs.find("outbound queue over the cap and not draining; closing the connection"),
+    ).toEqual([]);
     // Everyone else is untouched and still receives.
     await waitFor(() => editor.text === "written while the viewer is stalled", "the editor's copy");
     owner.append("!");
     await waitFor(() => editor.text.endsWith("!"), "a second broadcast to the editor");
     expect(owner.connected).toBe(true);
     expect(editor.connected).toBe(true);
+  });
+
+  it("does not close a socket that is over the cap by less than a document while it is draining", async () => {
+    // Over the cap (100 KB) but under the cap plus a document: a broadcast leaves it alone.
+    const server = await launch({ limits: { maxOutboundBytes: 100_000 } });
+    const f = await createDocument();
+    const owner = await TestClient.connect(server, f, "owner", "owner");
+    const viewer = await TestClient.connect(server, f, "viewer", "viewer");
+    const serverSide = serverSideOf(server, f.users.viewer!);
+    const transport = (serverSide.conn as unknown as { transport: { socket: object } }).transport;
+    Object.defineProperty(transport.socket, "bufferedAmount", { get: () => 5_000_000 });
+    owner.append("still fine");
+    await waitFor(() => viewer.text === "still fine", "the viewer to receive");
+    expect(serverSide.connected).toBe(true);
+    expect(server.logs.find("outbound queue over the cap; disconnecting")).toEqual([]);
   });
 
   it("does not disconnect a socket whose queue is under the cap", async () => {
@@ -218,42 +197,25 @@ describe("what the server queues for a socket is bounded", () => {
 });
 
 describe("what the server queues is measured and bounded on real queues", () => {
-  it("disconnects a client that does not poll while another member writes", async () => {
-    const server = await launch({ limits: { maxOutboundBytes: 100_000 } });
-    const f = await createDocument();
-    const owner = await TestClient.connect(server, f, "owner", "owner");
-    await connectStalled(server, f, "viewer", "viewer");
-    const serverSide = serverSideOf(server, f.users.viewer!);
-
-    for (let i = 0; i < 6; i += 1) owner.append("y".repeat(30_000));
-    await waitFor(() => !serverSide.connected, "the stalled viewer to be disconnected", 3000);
-    expect(server.logs.find("outbound queue over the cap; disconnecting")).toEqual([
-      expect.objectContaining({ userId: f.users.viewer, queuedBytes: expect.any(Number) }),
-    ]);
-    expect(
-      (server.logs.find("outbound queue over the cap; disconnecting")[0]!.queuedBytes as number) >
-        100_000,
-    ).toBe(true);
-    expect(owner.connected).toBe(true);
-  });
-
-  it("disconnects a client that is not reading on a document nothing is written to", async () => {
+  it("closes a connection that has stopped reading on a document nothing is written to", async () => {
     const server = await launch();
     const f = await createDocument();
-    await connectStalled(server, f, "viewer", "viewer");
+    const viewer = await TestClient.connect(server, f, "viewer", "viewer");
+    stopReading(viewer);
     const serverSide = serverSideOf(server, f.users.viewer!);
     // Nothing is broadcast and the client asks for nothing, so no check on the document's
-    // path runs. Something else fills the queue (a real one: the polling client takes nothing).
-    for (let i = 0; i < 60; i += 1) serverSide.emit("sync", new Uint8Array(100_000));
-    expect(bufferedBytes(serverSide)).toBeGreaterThan(DEFAULT_LIMITS.maxOutboundBytes);
+    // path runs: only the sweep can find it, at its second look at a queue that has not shrunk.
+    stuff(serverSide);
 
-    await waitFor(() => !serverSide.connected, "the sweep to close the connection", 2000);
-    expect(server.logs.find("outbound queue over the cap; closing the connection")).toHaveLength(1);
+    await waitFor(() => !serverSide.connected, "the sweep to close the connection", 4000);
+    expect(
+      server.logs.find("outbound queue over the cap and not draining; closing the connection"),
+    ).toHaveLength(1);
     expect(server.logs.find("outbound queue over the cap; disconnecting")).toEqual([]);
     expect(serverSide.conn.readyState).toBe("closed");
   });
 
-  it("refuses a second document-sized reply to a socket that has not taken the first", async () => {
+  it("refuses a document-sized reply to a socket that has not taken what it was sent", async () => {
     // The document (300 KB) is larger than the socket's burst (50 KB), so a reply is charged
     // half a bucket and the budgets are never what stops it: only the queue check in the reply can.
     const server = await launch({
@@ -267,19 +229,19 @@ describe("what the server queues is measured and bounded on real queues", () => 
       },
     });
     const { f } = await documentOf(server, 300_000);
-    const viewer = await connectStalled(server, f, "viewer", "viewer");
+    const viewer = await TestClient.connect(server, f, "viewer", "viewer");
+    stopReading(viewer);
     const serverSide = serverSideOf(server, f.users.viewer!);
+    // Same tick: the sweep needs two looks, so only the reply's own check can win this.
+    stuff(serverSide);
+    viewer.socket.emit("sync", Uint8Array.from([0, 1, 0]));
 
-    const stepOne = Uint8Array.from([0, 1, 0]);
-    // Spaced out: the budgets refill by the millisecond, and a bucket that a reply emptied
-    // must be full again for the next one, so that only the queue can refuse it.
-    for (let i = 0; i < 4; i += 1) {
-      viewer.emit("sync", stepOne);
-      await settle(25);
-    }
     await waitFor(() => !serverSide.connected, "the reply path to disconnect the viewer", 3000);
     expect(server.logs.find("outbound queue over the cap; disconnecting")).toHaveLength(1);
     expect(server.logs.find("byte budget exceeded by replies; disconnecting")).toEqual([]);
+    expect(
+      server.logs.find("outbound queue over the cap and not draining; closing the connection"),
+    ).toEqual([]);
   });
 
   it("charges a reply to the socket's own budget, though the user's budget is large", async () => {
@@ -297,11 +259,18 @@ describe("what the server queues is measured and bounded on real queues", () => 
   });
 
   it("checks a socket's queue without reading the packets in it, however many there are", async () => {
-    const server = await launch();
+    // The byte cap is out of the way: this is about what a broadcast does with a long queue.
+    const server = await launch({ limits: { maxOutboundBytes: 1_000_000_000 } });
     const f = await createDocument();
     const owner = await TestClient.connect(server, f, "owner", "owner");
-    await connectStalled(server, f, "viewer", "viewer");
+    const viewer = await TestClient.connect(server, f, "viewer", "viewer");
+    stopReading(viewer);
     const serverSide = serverSideOf(server, f.users.viewer!);
+    // The stuffed message holds the transport (Socket.IO sends its header first and the
+    // attachment after), so what follows waits in Engine.IO's buffer.
+    stuff(serverSide);
+    const engine = serverSide.conn as unknown as { writeBuffer: unknown[] };
+    await waitFor(() => engine.writeBuffer.length === 0, "the stuffed message to reach the socket");
 
     // Every way of reading the write buffer packet by packet is counted; its length is not.
     let packetReads = 0;

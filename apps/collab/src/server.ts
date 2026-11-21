@@ -26,6 +26,7 @@ import {
   guardConnection,
   queuedBytes,
   queuedPackets,
+  stalledOverCap,
 } from "./outbound";
 import { decodeRelay, encodeRelay } from "./relay";
 import { DocumentStore } from "./store";
@@ -164,8 +165,8 @@ export async function startCollabServer(
   });
   const allowedOrigins = options.corsOrigin === undefined ? null : [options.corsOrigin].flat();
   /**
-   * Whether a request may open a connection, for a polling request and for a WebSocket
-   * upgrade alike (the `cors` option below covers polling only). A request without an
+   * Whether a request may open a connection (the `cors` option below sets only the headers
+   * of the answer to a browser's preflight). A request without an
    * Origin header does not come from a browser; the token is its credential. A browser
    * request must come from a configured origin, or, when none is configured, from the
    * server's own origin.
@@ -182,6 +183,11 @@ export async function startCollabServer(
   };
   const io: CollabIo = new Server(httpServer, {
     maxHttpBufferSize: limits.maxUpdateBytes + FRAME_OVERHEAD_BYTES,
+    // WebSocket only. A long-polling answer is handed to the HTTP layer as soon as it is
+    // written, so the server could not see what a client that does not read has left in
+    // its socket buffers: the queue bounds below hold only where the server can count.
+    // The editor and the load generator ask for nothing else.
+    transports: ["websocket"],
     cors: options.corsOrigin ? { origin: options.corsOrigin } : undefined,
     allowRequest: (request, callback) => {
       if (originAllowed(request)) return callback(null, true);
@@ -242,12 +248,13 @@ export async function startCollabServer(
   // ones that are over a cap and closes them.
   const sweepQueues = setInterval(() => {
     for (const conn of engineConnections(io.engine)) {
-      const bytes = queuedBytes(conn);
-      const packets = queuedPackets(conn);
-      if (bytes <= limits.maxOutboundBytes && packets <= limits.maxOutboundPackets) continue;
-      warnAboutConnection("outbound queue over the cap; closing the connection", {
-        queuedBytes: bytes,
-        queuedPackets: packets,
+      // Over a cap is not enough: a client that reads a large reply at a normal rate is over
+      // the byte cap for as long as the download takes. A connection is closed when it was
+      // over a cap at the previous sweep too and the queue has not shrunk since.
+      if (!stalledOverCap(conn, limits.maxOutboundBytes, limits.maxOutboundPackets)) continue;
+      warnAboutConnection("outbound queue over the cap and not draining; closing the connection", {
+        queuedBytes: queuedBytes(conn),
+        queuedPackets: queuedPackets(conn),
       });
       dropConnection(conn);
     }

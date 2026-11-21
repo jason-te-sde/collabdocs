@@ -292,25 +292,39 @@ export class DocumentEntry {
       reason,
       ...(detail ? { detail } : {}),
     });
-    if (!this.shedIfBacklogged(socket)) socket.emit(COLLAB_EVENTS.rejected, { event, reason });
+    if (!this.shedIfBacklogged(socket, this.broadcastLimitBytes())) {
+      socket.emit(COLLAB_EVENTS.rejected, { event, reason });
+    }
   }
 
   /**
-   * Closes the socket, at once, when the client is not taking what is sent to it and more
-   * than `maxOutboundBytes` (or `maxOutboundPackets`) is queued for it. It runs before a
-   * broadcast to the socket and before a reply or notice caused by the socket's own
-   * message, so the memory held for one socket stays near the cap plus one message,
-   * however slowly the client reads. The emits at attach, and the notices sent just before
-   * a disconnect, are not preceded by it; the periodic sweep in `server.ts` covers every
-   * connection, this socket's included. The check reads two counters and walks nothing:
-   * its cost does not depend on how much is queued. Returns whether the socket was closed.
+   * The queue at which a broadcast, or a notice caused by a message, closes a socket at
+   * once: the cap plus the largest document, which is the most a reply can add. A client
+   * that is taking a large reply is over the cap for as long as the download lasts and
+   * must not be dropped by the next cursor move; a client that has stopped reading is
+   * closed by the sweep in `server.ts` at its second sweep over the cap, and by this
+   * check if its queue is past a full cap plus a full document.
    */
-  private shedIfBacklogged(socket: CollabSocket): boolean {
+  private broadcastLimitBytes(): number {
+    const { maxOutboundBytes, maxDocumentBytes } = this.deps.limits;
+    return maxOutboundBytes + maxDocumentBytes;
+  }
+
+  /**
+   * Closes the socket, at once, when more than `limitBytes` (or `maxOutboundPackets`) is
+   * queued for it that the client has not taken. It runs before a broadcast to the socket
+   * and before a reply or notice caused by the socket's own message. A reply is held to
+   * `maxOutboundBytes` itself: a second document is not queued for a client that has not
+   * taken the first. The emits at attach, and the notices sent just before a disconnect,
+   * are not preceded by it; the sweep covers every connection. The check reads two
+   * counters and walks nothing: its cost does not depend on how much is queued. Returns
+   * whether the socket was closed.
+   */
+  private shedIfBacklogged(socket: CollabSocket, limitBytes: number): boolean {
     if (!socket.connected) return false;
-    const { maxOutboundBytes, maxOutboundPackets } = this.deps.limits;
     const queued = bufferedBytes(socket);
     const packets = bufferedPackets(socket);
-    if (queued <= maxOutboundBytes && packets <= maxOutboundPackets) return false;
+    if (queued <= limitBytes && packets <= this.deps.limits.maxOutboundPackets) return false;
     this.deps.logger.warn("outbound queue over the cap; disconnecting", {
       documentId: this.id,
       userId: socket.data.userId,
@@ -323,7 +337,7 @@ export class DocumentEntry {
 
   /** Sends a sync reply to the socket that asked for it, within its limits. */
   private reply(socket: CollabSocket, message: Uint8Array): void {
-    if (this.shedIfBacklogged(socket)) return;
+    if (this.shedIfBacklogged(socket, this.deps.limits.maxOutboundBytes)) return;
     // A step 1 costs the sender three bytes and the server a copy of the document, so the
     // answer is charged against the socket's and the user's byte budgets, at most half
     // a bucket each: otherwise step 1 amplifies.
@@ -686,7 +700,8 @@ export class DocumentEntry {
   private emitLocal(event: "sync" | "awareness", data: Uint8Array, exceptSocketId?: string): void {
     // A broadcast is queued for every socket of the room, including one that has stopped
     // reading: close those first, so nothing more is added to their queues.
-    for (const socket of [...this.sockets]) this.shedIfBacklogged(socket);
+    const limit = this.broadcastLimitBytes();
+    for (const socket of [...this.sockets]) this.shedIfBacklogged(socket, limit);
     let target = this.deps.io.local.to(this.room);
     if (exceptSocketId) target = target.except(exceptSocketId);
     target.emit(event, data);
