@@ -158,6 +158,21 @@ Because of the changes in Addendum 4, which add work to every message, the fifte
 
 The earlier results are kept, unchanged, in `apps/collab/bench/results/earlier-before-security-fixes/` (made from commits `8d8cecd` and `2c1c3cb`). The README's Performance section is generated from the new runs only.
 
+### Addendum 6: the runs repeated again, after the per-connection limits changed
+
+The fifteen runs of Addendum 5 were made on commit `f000b55`. After them the collab server's per-connection limits changed again, and the change is on the path of every message, so the fifteen runs are repeated on the new release-candidate commit. What changed:
+
+- The check before a broadcast no longer walks the packets queued for each socket. It reads two counters per socket (a running byte count that is updated when a packet is queued and when the queue is handed to the transport, and the length of the write buffer). The description of the outbound cap in Addendum 4 ("before every send ... under the cap") is the check as it was when the first runs of Addendum 5 were made; the shipped check is the constant-time one.
+- Every Engine.IO packet a connection receives is counted against a bucket (`COLLAB_MAX_PACKETS_PER_SECOND`, 250, and `COLLAB_PACKET_BURST`, 500), and the packet is looked at for a CONNECT to a namespace other than `/`.
+- The answer to a sync step 1 is charged at most half of a burst (it was a whole burst), to the socket's and the user's byte budgets. Each editor of a run receives one reply of under 10 KB, so no run reaches either cap.
+- A timer sweeps every connection every 500 ms for a queue over `COLLAB_MAX_OUTBOUND_BYTES` or the new `COLLAB_MAX_OUTBOUND_PACKETS` (16,384).
+
+The protocol is otherwise unchanged: the same sizes and workloads and the same counts (3 one-in-five runs each at 50, 100 and 200 editors, made in rounds; 3 all-write runs each at 50 and 100 editors, made in rounds), on a clean tree, with the quiet-machine check before each run, one run at a time, a Redis and a database of their own. No parameter or rule is changed and no limit is raised; the three new limits have their defaults. If a default limit throttles or disconnects a client, that is the result and is reported as it is.
+
+Why the defaults should admit this load, before the runs: a socket is sent about 600 messages per second in the all-write run with 100 editors (Addendum 4), which is about 1,200 packets per second (a binary message is two), so a transport that took none of them would reach the 16,384-packet cap after about 13 seconds, and a client of the load test is never that far behind. An editor sends about 3 edits and 3 cursor updates per second, which is about 12 packets per second against a sustained 250; at connect it sends a handful. Whether this holds is what the runs show: any disconnect, close or refusal is in the results file.
+
+The results of Addendum 5 are kept, unchanged, in `apps/collab/bench/results/earlier-before-queue-sweep/` (made from commit `f000b55`), next to `earlier-before-security-fixes/`. The README's Performance section is generated from the new runs only.
+
 ### Notes that do not change any measurement
 
 - The load test edits a `Y.Text`, as in the nine runs, so that its numbers are comparable. The collab server relays Yjs updates without interpreting them, so the type of the shared structure does not change what it does. The editor's own structure is a `Y.XmlFragment` of paragraphs; the convergence test covers it.
