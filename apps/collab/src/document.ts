@@ -13,7 +13,7 @@ import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
 import type { Limits, PersistenceOptions } from "./config";
 import { errorFields, type Logger } from "./logger";
-import { bufferedBytes, dropSocket } from "./outbound";
+import { bufferedBytes, bufferedPackets, dropSocket } from "./outbound";
 import type { DocumentStore } from "./store";
 import type { ClientOrigin, CollabIo, CollabSocket, RelayKind } from "./types";
 
@@ -297,19 +297,25 @@ export class DocumentEntry {
 
   /**
    * Closes the socket, at once, when the client is not taking what is sent to it and more
-   * than `maxOutboundBytes` is queued for it. Every emit that a client can cause or that
-   * reaches many clients is preceded by this check, so the memory held for one socket
-   * stays near the cap plus one message, however slowly the client reads. Returns whether
-   * the socket was closed.
+   * than `maxOutboundBytes` (or `maxOutboundPackets`) is queued for it. It runs before a
+   * broadcast to the socket and before a reply or notice caused by the socket's own
+   * message, so the memory held for one socket stays near the cap plus one message,
+   * however slowly the client reads. The emits at attach, and the notices sent just before
+   * a disconnect, are not preceded by it; the periodic sweep in `server.ts` covers every
+   * connection, this socket's included. The check reads two counters and walks nothing:
+   * its cost does not depend on how much is queued. Returns whether the socket was closed.
    */
   private shedIfBacklogged(socket: CollabSocket): boolean {
     if (!socket.connected) return false;
+    const { maxOutboundBytes, maxOutboundPackets } = this.deps.limits;
     const queued = bufferedBytes(socket);
-    if (queued <= this.deps.limits.maxOutboundBytes) return false;
+    const packets = bufferedPackets(socket);
+    if (queued <= maxOutboundBytes && packets <= maxOutboundPackets) return false;
     this.deps.logger.warn("outbound queue over the cap; disconnecting", {
       documentId: this.id,
       userId: socket.data.userId,
       queuedBytes: queued,
+      queuedPackets: packets,
     });
     dropSocket(socket);
     return true;
@@ -319,7 +325,8 @@ export class DocumentEntry {
   private reply(socket: CollabSocket, message: Uint8Array): void {
     if (this.shedIfBacklogged(socket)) return;
     // A step 1 costs the sender three bytes and the server a copy of the document, so the
-    // answer is charged like a message the socket had sent: otherwise step 1 amplifies.
+    // answer is charged against the socket's and the user's byte budgets, at most half
+    // a bucket each: otherwise step 1 amplifies.
     if (!this.deps.chargeOutbound(socket, message.byteLength)) {
       this.deps.logger.warn("byte budget exceeded by replies; disconnecting", {
         documentId: this.id,

@@ -43,12 +43,28 @@ export interface Limits {
   /** The largest accepted awareness update, in bytes. */
   maxAwarenessBytes: number;
   /**
-   * The most bytes the server may hold queued for one socket, that the client has not
-   * taken. Checked before every send to a socket; a socket over it is disconnected.
-   * One message is added to a queue after the check, so a queue can reach this plus
-   * one message (a reply for a document, at most `maxDocumentBytes`).
+   * The most bytes the server may hold queued for one connection, that the client has not
+   * taken. Checked in constant time before a broadcast or a reply to a socket, and by a
+   * periodic sweep over every connection; a connection over it is closed. One message is
+   * added to a queue after the check, so a queue can reach this plus one message (a reply
+   * for a document, at most `maxDocumentBytes`).
    */
   maxOutboundBytes: number;
+  /**
+   * The most packets the server may hold queued for one connection, that the transport has
+   * not taken. It bounds floods of tiny packets, which the byte cap lets through. Checked
+   * at the same places as `maxOutboundBytes`. A message with a binary payload is two packets.
+   */
+  maxOutboundPackets: number;
+  /**
+   * Sustained Engine.IO packets per second one connection may send, before and after it
+   * joins a document. It counts everything the transport carries (a message with a binary
+   * payload is two packets, a heartbeat is one), so it is above twice
+   * `maxMessagesPerSecond`. A connection over it is closed.
+   */
+  maxPacketsPerSecond: number;
+  /** Packets a connection may send in one burst; above twice `messageBurst`. */
+  packetBurst: number;
 }
 
 export interface PersistenceOptions {
@@ -131,6 +147,11 @@ export const DEFAULT_LIMITS: Limits = {
   // Four times the default `maxUpdateBytes`: room for a few of the largest updates to be
   // in flight to a slow client, and no more.
   maxOutboundBytes: 4 * 1024 * 1024,
+  // At the busiest load measured, a socket is sent about 1200 packets per second, so this is
+  // more than ten seconds of that for a transport that has stopped taking packets.
+  maxOutboundPackets: 16_384,
+  maxPacketsPerSecond: 250,
+  packetBurst: 500,
 };
 
 export const DEFAULT_PERSISTENCE: PersistenceOptions = {
@@ -257,6 +278,9 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
       maxPendingBytes: number(env, "COLLAB_MAX_PENDING_BYTES"),
       maxAwarenessBytes: number(env, "COLLAB_MAX_AWARENESS_BYTES"),
       maxOutboundBytes: number(env, "COLLAB_MAX_OUTBOUND_BYTES"),
+      maxOutboundPackets: number(env, "COLLAB_MAX_OUTBOUND_PACKETS"),
+      maxPacketsPerSecond: number(env, "COLLAB_MAX_PACKETS_PER_SECOND"),
+      packetBurst: number(env, "COLLAB_PACKET_BURST"),
     }),
     persistence: defined({
       compactEveryUpdates: number(env, "COLLAB_COMPACT_EVERY_UPDATES"),

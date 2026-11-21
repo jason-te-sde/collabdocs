@@ -20,6 +20,13 @@ import {
   type ConnectionCounter,
 } from "./connections";
 import { KeyedRateLimiter, RateLimiter, clientAddress, payloadBytes } from "./limits";
+import {
+  dropConnection,
+  engineConnections,
+  guardConnection,
+  queuedBytes,
+  queuedPackets,
+} from "./outbound";
 import { decodeRelay, encodeRelay } from "./relay";
 import { DocumentStore } from "./store";
 import type { CollabIo, CollabSocket, RelayKind } from "./types";
@@ -48,6 +55,36 @@ export const MAX_TOKEN_CHARS = 2048;
  * written without waiting for it either way.
  */
 const SHUTDOWN_SOCKET_GRACE_MS = 1000;
+
+/**
+ * How long a connection whose handshake was refused gets to read the refusal and close
+ * before it is cut. The close is graceful so the client sees the error; a client that does
+ * not read must not keep the connection open.
+ */
+const REFUSED_CLOSE_GRACE_MS = 1000;
+
+/** How often every connection's queue is checked against the outbound caps. */
+const QUEUE_SWEEP_INTERVAL_MS = 500;
+
+/**
+ * Warnings about connections the server closes for what they send are limited to this many
+ * per second (a burst of 20), whatever the number of connections: a flood must not become
+ * a flood of log lines. What was left out is counted in the next line.
+ */
+const CONNECTION_WARNINGS_PER_SECOND = 10;
+
+/**
+ * The namespace a Socket.IO CONNECT packet names, or null if the packet is not a CONNECT.
+ * `data` is an Engine.IO message without its leading type character, so a CONNECT starts
+ * with "0": then comes the namespace if it is not "/" ("0/chat,{...}"), or the auth
+ * payload ("0{...}") or nothing for "/".
+ */
+export function connectNamespace(data: string): string | null {
+  if (!data.startsWith("0")) return null;
+  if (data[1] !== "/") return "/";
+  const comma = data.indexOf(",");
+  return comma === -1 ? data.slice(1) : data.slice(1, comma);
+}
 
 /** How long a command to Redis may take before it fails. */
 const REDIS_COMMAND_TIMEOUT_MS = 1500;
@@ -158,6 +195,65 @@ export async function startCollabServer(
     perMessageDeflate: false,
   });
 
+  let suppressedWarnings = 0;
+  const warningBudget = new RateLimiter(CONNECTION_WARNINGS_PER_SECOND, 20);
+  /** A warning about a connection closed for what it sent; rate limited as a whole. */
+  const warnAboutConnection = (message: string, fields: object = {}): void => {
+    if (!warningBudget.allow()) {
+      suppressedWarnings += 1;
+      return;
+    }
+    logger.warn(message, {
+      ...fields,
+      instance: instanceId,
+      ...(suppressedWarnings > 0 ? { suppressedSinceLast: suppressedWarnings } : {}),
+    });
+    suppressedWarnings = 0;
+  };
+
+  // Every Engine.IO connection, before it has joined anything and whether or not it ever
+  // does. Socket.IO's own replies (to a CONNECT for a namespace that does not exist, to a
+  // refused handshake) are not events and no budget below sees them, so the connection is
+  // limited here: by what it sends, by the namespaces it may ask for and by what is queued.
+  io.engine.on("connection", (conn: unknown) => {
+    const packets = new RateLimiter(limits.maxPacketsPerSecond, limits.packetBurst);
+    let closed = false;
+    guardConnection(conn, (packet) => {
+      if (closed) return;
+      if (!packets.allow()) {
+        closed = true;
+        warnAboutConnection("too many packets from a connection; closing it");
+        dropConnection(conn);
+        return;
+      }
+      if (packet.type !== "message" || typeof packet.data !== "string") return;
+      const namespace = connectNamespace(packet.data);
+      if (namespace !== null && namespace !== "/") {
+        closed = true;
+        warnAboutConnection("connect to a namespace the server does not have; closing it", {
+          namespace: namespace.slice(0, 64),
+        });
+        dropConnection(conn);
+      }
+    });
+  });
+  // The memory held for a connection is bounded for every connection, whether or not it
+  // belongs to a document and whether or not anything is being sent to it: this finds the
+  // ones that are over a cap and closes them.
+  const sweepQueues = setInterval(() => {
+    for (const conn of engineConnections(io.engine)) {
+      const bytes = queuedBytes(conn);
+      const packets = queuedPackets(conn);
+      if (bytes <= limits.maxOutboundBytes && packets <= limits.maxOutboundPackets) continue;
+      warnAboutConnection("outbound queue over the cap; closing the connection", {
+        queuedBytes: bytes,
+        queuedPackets: packets,
+      });
+      dropConnection(conn);
+    }
+  }, QUEUE_SWEEP_INTERVAL_MS);
+  sweepQueues.unref();
+
   const cleanups: Array<() => Promise<void>> = [];
   let rateLimiterEvictions = (): Record<string, number> => ({});
   let relay = (
@@ -246,6 +342,7 @@ export async function startCollabServer(
         logger,
       );
     } catch (error) {
+      clearInterval(sweepQueues);
       for (const client of clients) client.disconnect();
       await store.close();
       throw error;
@@ -262,11 +359,13 @@ export async function startCollabServer(
     logger,
     persistence: options.persistence,
     limits,
-    // The most a single reply can cost is the whole bucket: a document larger than the
-    // burst must still be openable, by a socket whose bucket is full.
+    // The most a single reply can cost is half a bucket: a document larger than the burst
+    // must still be openable by a socket whose bucket is full, and a full bucket is
+    // already a few bytes short once the three-byte request that asked for the reply has
+    // been counted (a refill takes a whole millisecond to show).
     chargeOutbound: (socket, bytes) =>
-      socket.data.byteBudget.allow(Math.min(bytes, limits.byteBurst)) &&
-      bytesByUser.allow(socket.data.userId, Math.min(bytes, limits.byteBurstPerUser)),
+      socket.data.byteBudget.allow(Math.min(bytes, limits.byteBurst / 2)) &&
+      bytesByUser.allow(socket.data.userId, Math.min(bytes, limits.byteBurstPerUser / 2)),
     relay: (documentId, kind, data, userId) => {
       try {
         relay(documentId, kind, data, userId);
@@ -305,11 +404,30 @@ export async function startCollabServer(
   /** Payload bytes received and not yet processed, over every socket of this instance. */
   let inFlightBytes = 0;
 
+  /** Connections whose refused handshake has been logged. */
+  const refusalLogged = new WeakSet<object>();
+
   // The handshake: token, membership, capacity. Nothing else runs for a socket that fails here.
   io.use(async (socket, next) => {
+    // A refused handshake ends the connection: the client has no document to be in and no
+    // reason to keep a transport open, and an unauthenticated connection may not collect
+    // refusals. Closing is deferred so that Socket.IO writes the error first (it does so
+    // on the next tick), and is graceful so that the client reads it; a client that does
+    // not read is cut after a grace period. One warning per connection, and a limited
+    // number overall.
+    const closeAfterRefusal = () => {
+      setImmediate(() => {
+        socket.conn.close();
+        setTimeout(() => dropConnection(socket.conn), REFUSED_CLOSE_GRACE_MS).unref();
+      });
+    };
     const refuse = (code: HandshakeErrorCode, why: string, fields: object = {}) => {
-      logger.warn("handshake refused", { code, why, instance: instanceId, ...fields });
+      if (!refusalLogged.has(socket.conn)) {
+        refusalLogged.add(socket.conn);
+        warnAboutConnection("handshake refused", { code, why, ...fields });
+      }
       next(new HandshakeError(code));
+      closeAfterRefusal();
     };
     // The transport's close is the one signal that a client left during the handshake
     // (`disconnect` does not fire before the handshake completes). It is registered before
@@ -425,6 +543,7 @@ export async function startCollabServer(
     } catch (error) {
       logger.error("handshake failed", errorFields(error));
       next(new HandshakeError("server_error"));
+      closeAfterRefusal();
     }
   });
 
@@ -523,6 +642,7 @@ export async function startCollabServer(
       // The documents are written while the sockets close, not after: a client that does
       // not read keeps its socket open until the transport is cut, and must not delay
       // persistence. Sockets that are still open after the grace period are cut.
+      clearInterval(sweepQueues);
       const cut = setTimeout(() => {
         // Engine.IO has already let go of these sockets, but the TCP connection stays
         // until the peer answers the close handshake (30 s in `ws`).

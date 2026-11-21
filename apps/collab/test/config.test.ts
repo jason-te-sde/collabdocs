@@ -32,6 +32,9 @@ describe("configuration", () => {
       maxPendingBytes: 8_388_608,
       maxAwarenessBytes: 8_192,
       maxOutboundBytes: 4_194_304,
+      maxOutboundPackets: 16_384,
+      maxPacketsPerSecond: 250,
+      packetBurst: 500,
     });
     expect(DEFAULT_PERSISTENCE).toEqual({
       compactEveryUpdates: 200,
@@ -70,6 +73,9 @@ describe("configuration", () => {
       COLLAB_MAX_PENDING_BYTES: "24",
       COLLAB_MAX_AWARENESS_BYTES: "25",
       COLLAB_MAX_OUTBOUND_BYTES: "26",
+      COLLAB_MAX_OUTBOUND_PACKETS: "27",
+      COLLAB_MAX_PACKETS_PER_SECOND: "28",
+      COLLAB_PACKET_BURST: "29",
       COLLAB_COMPACT_EVERY_UPDATES: "14",
       COLLAB_COMPACT_AFTER_MS: "15",
       COLLAB_UNLOAD_GRACE_MS: "16",
@@ -103,6 +109,9 @@ describe("configuration", () => {
         maxPendingBytes: 24,
         maxAwarenessBytes: 25,
         maxOutboundBytes: 26,
+        maxOutboundPackets: 27,
+        maxPacketsPerSecond: 28,
+        packetBurst: 29,
       },
       persistence: {
         compactEveryUpdates: 14,

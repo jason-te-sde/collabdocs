@@ -18,7 +18,7 @@ Version 0.1.0 is the first release ([CHANGELOG](CHANGELOG.md)). It contains:
 - the sync-latency load test, with its protocol written down before the first run and its results committed ([Performance](#performance));
 - CI, including a Lighthouse gate (performance and accessibility of at least 0.92) and a check that every number in the Performance section is in a committed results file.
 
-What it leaves out, on purpose, is listed under "Known limits" in [SECURITY.md](SECURITY.md) (no password reset, no transfer of ownership, no rate limit on the document routes) and under "Not measured" in [Performance](#performance).
+What it leaves out, on purpose, is listed under "Known limits" in [SECURITY.md](SECURITY.md) (no password reset, no rate limit on the document routes; that ownership cannot be transferred is under "What you may do") and under "Not measured" in [Performance](#performance).
 
 ## The editor
 
@@ -96,6 +96,8 @@ Each cell is **min / median / max** of the per-run medians across 3 runs of the 
 
 <!-- lighthouse-table:end -->
 <!-- prettier-ignore-end -->
+
+The table is from commit `5897444` (2026-11-20). Later commits changed the collab server, which no page Lighthouse measures depends on for its score, and also the editor's provider (when it announces presence) and the token route (which now carries the display name); those two are used by the editor page, so the table predates them. The Lighthouse gate (0.92) has passed in CI on every later commit; the table was not regenerated.
 
 Conditions: a production build (`next build` and `next start`), the collab server, PostgreSQL 17 and Redis 7 running on the same runner, signed in as a verified user for the document list and the editor (a session cookie from `scripts/lighthouse/seed.mjs`, set by a Puppeteer script), the editor opened on a seeded document that holds five paragraphs, Lighthouse's default simulated throttling. **The gate is applied to the desktop preset and to the mobile emulation**: both pass, so both are enforced. Performance, accessibility and these conditions are in [`lighthouserc.cjs`](lighthouserc.cjs) and the `lighthouse` job of [`.github/workflows/ci.yml`](.github/workflows/ci.yml); the reports are the job's `lighthouse-reports` artifact. These scores describe a local, same-host server: the network between browser and server is not in them, and the editor page is measured with its socket connected but with nobody else in the document.
 
@@ -232,7 +234,10 @@ Everything the collab server limits is an environment variable; the defaults are
 | `COLLAB_MESSAGE_BURST`                  | 200       | messages a socket may send at once                                                                              |
 | `COLLAB_MAX_BYTES_PER_SECOND`           | 262144    | per socket; over it the socket is disconnected                                                                  |
 | `COLLAB_BYTE_BURST`                     | 2097152   | bytes a socket may send at once (at least the update maximum); the replies it asks for count too                |
-| `COLLAB_MAX_OUTBOUND_BYTES`             | 4194304   | queued for one socket and not yet taken by its client; over it the socket is disconnected                       |
+| `COLLAB_MAX_OUTBOUND_BYTES`             | 4194304   | queued for one connection and not yet taken by its client; over it the connection is closed                     |
+| `COLLAB_MAX_OUTBOUND_PACKETS`           | 16384     | packets queued for one connection and not yet taken by the transport; over it the connection is closed          |
+| `COLLAB_MAX_PACKETS_PER_SECOND`         | 250       | Engine.IO packets one connection may send, before or after it joins a document; over it it is closed            |
+| `COLLAB_PACKET_BURST`                   | 500       | packets a connection may send at once                                                                           |
 | `COLLAB_MAX_DOCUMENT_BYTES`             | 16777216  | snapshot plus log; past it writes are refused                                                                   |
 | `COLLAB_MAX_PENDING_BYTES`              | 8388608   | accepted but not yet stored, per document; past it, disconnect                                                  |
 | `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT`   | 250       | across instances                                                                                                |
