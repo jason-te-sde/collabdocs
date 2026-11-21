@@ -144,13 +144,19 @@ The nine earlier files measure the generator's event-loop delay with Node's `mon
 
 ### Addendum 4: server limits and presence checks added after the runs
 
-After the fifteen runs, the collab server gained three things that touch the traffic the load test produces, and the load generator one change. **No run was repeated: the results files are the runs of the earlier code.**
+After the fifteen runs, the collab server gained three things that touch the traffic the load test produces, and the load generator one change. The earlier fifteen results files are the runs of the code before these changes; Addendum 5 repeats the runs on the code that ships.
 
 - **Presence is checked against the token.** The server refuses an awareness state that does not carry `user.id` equal to the socket's user, and shows the name from the token. The load generator's editors therefore announce `{ user: { id, name, color } }` (the user id they sign in as, and the name in their token) instead of `{ user: { name, color } }`: about 30 bytes more per awareness message. The commit of the earlier code is in every results file.
 - **An outbound cap per socket** (`COLLAB_MAX_OUTBOUND_BYTES`, 4 MiB by default). Before every send, a socket with more queued for it than the cap is disconnected. The load cannot reach it. The largest per-socket queue the load can produce, from the delivery rates in the results files: in the all-write run with 100 editors a socket is sent about 300 sync messages and 300 awareness messages per second. At 1 KiB each, several times their real size (a sync message for one character is a few tens of bytes, an awareness message a couple of hundred, plus Socket.IO framing), that is about 600 KiB per second, so a socket that stopped reading for the whole 5-second drain would have 3 MB queued, under the cap; at the real sizes it is well under 1 MB. The worst event-loop stall of a generator process in any run was 69 ms, which is about 40 KiB at that rate. The join reply (the document is under 10 KB, the present awareness states under 100 KB) is far below it. This is arithmetic on the recorded rates, not a measurement of the queue.
 - **Replies are charged to the byte budgets.** The answer to a sync step 1 counts against the socket's and the user's byte budgets (2 MiB and 4 MiB bursts). Each editor of a run is its own user and receives one reply of under 10 KB.
 
-The all-write and one-in-five results therefore describe a server without these checks; the checks add a few comparisons per send and, per awareness message, a JSON parse and an encode of one state.
+The checks add a few comparisons per send and, per awareness message, a JSON parse and an encode of one state.
+
+### Addendum 5: the runs repeated on the release candidate
+
+Because of the changes in Addendum 4, which add work to every message, the fifteen runs are repeated on the release-candidate commit: every size and workload of this protocol, the same counts (3 one-in-five runs each at 50, 100 and 200 editors, made in rounds; 3 all-write runs each at 50 and 100 editors, made in rounds), on a clean tree, with the quiet-machine check before each run and one run at a time. The protocol is otherwise unchanged: no parameter, limit or rule is changed, and no limit is raised. If a default limit, including the outbound cap and the reply charge, throttles or disconnects a client, that is the result and is reported as it is.
+
+The earlier results are kept, unchanged, in `apps/collab/bench/results/earlier-before-security-fixes/` (made from commits `8d8cecd` and `2c1c3cb`). The README's Performance section is generated from the new runs only.
 
 ### Notes that do not change any measurement
 
