@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  normalizeTable,
   START,
   END,
   allowedNumbers,
@@ -135,4 +136,20 @@ test("an invalid run is shown but does not count towards the claim", () => {
   assert.match(table, /\| invalid \|/);
   assert.match(table, /holds/i);
   assert.doesNotMatch(table, /does not hold/i);
+});
+
+test("column padding added by a formatter is not a difference", () => {
+  const results = [run("50-run1", 50, 7.4)];
+  const readme = withTable("## Performance\n\ntext\n", results);
+  const padded = readme
+    .split("\n")
+    .map((line) =>
+      line.startsWith("|")
+        ? line.replaceAll(" | ", "     |   ").replace(/-{3,}/g, "----------")
+        : line,
+    )
+    .join("\n");
+  assert.notEqual(padded, readme);
+  assert.deepEqual(checkReadme(padded, results), []);
+  assert.equal(normalizeTable(padded), normalizeTable(readme));
 });

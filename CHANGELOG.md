@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added (performance)
+
+- **Sync-latency load test** (`apps/collab/bench`): headless editors speaking the real sync and awareness protocol against the real collab server, spread over several processes, with per-run JSON results committed under `apps/collab/bench/results`. The claim, the protocol and the rules for an invalid run are in `docs/benchmarks.md`, committed before the first measured run. The README's Performance section is filled from those files, and CI checks that every number in it appears in one of them.
+- **Convergence property test** (fast-check, against a real server): random inserts, deletes and formatting from three clients, held back and released late, out of order and twice, with a disconnect and a reconnect, must end in the same state in every client and in the database, with no typed text lost.
+
 ### Changed (review round)
 
 - **Collab server limits.** A per-socket byte budget, a cap on a document's stored size (writes are refused with `document_full`), a bounded queue of updates waiting for the database (the socket is closed with `overloaded`), and an 8 KiB cap on awareness messages.

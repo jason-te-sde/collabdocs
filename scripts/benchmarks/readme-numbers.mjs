@@ -102,6 +102,25 @@ export function renderTable(results) {
   ].join("\n");
 }
 
+/**
+ * A table without its padding: Prettier aligns the columns of a Markdown table and puts blank
+ * lines around it, which must not count as a difference. Cells are trimmed and the separator row is reduced to dashes.
+ */
+export function normalizeTable(text) {
+  return text
+    .split("\n")
+    .map((line) =>
+      line.startsWith("|")
+        ? line
+            .split("|")
+            .map((cell) => (/^\s*:?-+:?\s*$/.test(cell) ? "---" : cell.trim()))
+            .join("|")
+        : line.trimEnd(),
+    )
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
 function table(results) {
   return `${START}\n${renderTable(results)}\n${END}`;
 }
@@ -131,7 +150,7 @@ export function checkReadme(readme, results) {
     return [`the README has no ${START} ... ${END} block in its Performance section`];
   }
   const current = readme.slice(start, end + END.length);
-  if (current !== table(results)) {
+  if (normalizeTable(current) !== normalizeTable(table(results))) {
     problems.push(
       "the performance table is not what the results files produce; run: node scripts/benchmarks/readme-numbers.mjs --write",
     );

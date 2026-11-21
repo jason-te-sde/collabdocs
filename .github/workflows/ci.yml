@@ -33,6 +33,19 @@ jobs:
       - name: Hygiene script tests
         run: node --test scripts/check-hygiene.test.mjs
 
+  readme-numbers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Tests of the check
+        run: node --test scripts/benchmarks/readme-numbers.test.mjs
+      - name: The README's performance table and numbers come from the committed results
+        run: node scripts/benchmarks/readme-numbers.mjs
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

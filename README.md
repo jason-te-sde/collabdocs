@@ -14,9 +14,11 @@ Version 0.1 is nearly complete. Built:
 - the collab server: Yjs sync and awareness over Socket.IO, a role check on every event, persistence (an update log compacted into snapshots), several instances behind Redis, and configurable limits;
 - the editor: TipTap bound to a Yjs document, remote cursors and a presence list, a connection indicator, read-only mode for viewers, edits kept in IndexedDB and merged on reconnect, pages for sign-in, the document list and sharing (Tailwind and Radix UI);
 - Playwright end-to-end tests with two or three real browsers, and an axe-core accessibility check on the pages;
-- CI, including a Lighthouse gate (performance and accessibility of at least 0.92).
+- a property test that random concurrent edits, delivered late, out of order and across a disconnect, always converge (against a real server);
+- the sync-latency load test, with its protocol written down before the first run and its results committed ([Performance](#performance));
+- CI, including a Lighthouse gate (performance and accessibility of at least 0.92) and a check that every number in the Performance section is in a committed results file.
 
-Not done yet: the sync-latency load test ([Performance](#performance)) and the public release.
+Not done yet: the public release.
 
 ## The editor
 
@@ -35,7 +37,7 @@ The screenshot is Ada's browser, one of three Playwright browsers in the same do
 
 ## Goals
 
-The project is built to deliver four things. Goals 1 and 2 are **not yet measured**: each gets a benchmark, and the numbers go in [Performance](#performance) when they exist. Goals 3 and 4 have tests that run in CI.
+The project is built to deliver four things. Goals 1 and 2 are measured by the load test, and the numbers, with what they do and do not show, are in [Performance](#performance). Goals 3 and 4 have tests that run in CI.
 
 1. Yjs CRDT sync over Socket.IO with a latency under 100 ms. Defined as: with 50 editors on loopback, the p95 of the time from one client's write to every other client applying it.
 2. 50 or more people editing one document at once, with live cursors and presence (the Yjs awareness protocol).
@@ -101,20 +103,48 @@ The scores are taken from CI, not from a laptop, because they depend on the mach
 
 ## Performance
 
-_This section is filled in by the sync-latency load test (J-T4). No numbers are claimed until it has run._
+Measured by the sync-latency load test in `apps/collab/bench`, under the protocol in [docs/benchmarks.md](docs/benchmarks.md), which was committed before the first measured run. Every number in this section is in a committed file in [`apps/collab/bench/results`](apps/collab/bench/results); `scripts/benchmarks/readme-numbers.mjs` runs in CI and fails if the table is not what those files produce or if another number here is in none of them.
+
+**The claim, as defined.** "Sync latency under 100 ms" means: with 50 editors on one document on local loopback, the 95th percentile of the time from a client applying and sending its own edit to another client having received and applied it, over every (edit, receiving editor) pair of a run, below 100 ms in each of at least three runs.
+
+<!-- performance-table:start -->
+
+| Results file    | Editors          | p50 (ms) | p95 (ms) | p99 (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms) | Status |
+| --------------- | ---------------- | -------- | -------- | -------- | ------------------------- | ------------------------------ | ------------------------------------- | ------ |
+| `50-run1.json`  | 50 (10 writing)  | 1.9      | 5.2      | 7.5      | 147                       | 10                             | 2.0                                   | valid  |
+| `50-run2.json`  | 50 (10 writing)  | 2.7      | 6.1      | 8.2      | 146                       | 15                             | 2.0                                   | valid  |
+| `50-run3.json`  | 50 (10 writing)  | 2.3      | 5.9      | 7.8      | 193                       | 12                             | 1.9                                   | valid  |
+| `100-run1.json` | 100 (20 writing) | 2.3      | 6.2      | 9.7      | 202                       | 23                             | 2.0                                   | valid  |
+| `100-run2.json` | 100 (20 writing) | 2.4      | 6.3      | 9.0      | 203                       | 24                             | 2.0                                   | valid  |
+| `100-run3.json` | 100 (20 writing) | 1.9      | 5.0      | 7.6      | 201                       | 18                             | 1.9                                   | valid  |
+| `200-run1.json` | 200 (40 writing) | 3.3      | 10.3     | 17.5     | 219                       | 48                             | 1.9                                   | valid  |
+| `200-run2.json` | 200 (40 writing) | 3.4      | 10.2     | 15.9     | 225                       | 49                             | 1.9                                   | valid  |
+| `200-run3.json` | 200 (40 writing) | 3.9      | 11.4     | 17.8     | 222                       | 52                             | 1.9                                   | valid  |
+
+**The claim holds as defined:** the p95 of every one of the 3 valid runs at 50 editors is below 100 ms (highest 6.1 ms).
+<!-- performance-table:end -->
+
+**Setup.** One Apple M2 laptop with 8 cores and 16 GB of RAM; the clients and the server on the loopback interface; Node v25.6.1, PostgreSQL 17.10 and Redis 8.10.3, all local. The server is the real collab server in production mode: one instance, the Redis adapter on, PostgreSQL persistence on (update log compacted into snapshots), and the default limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. Every fifth editor types, 3 edits per second each (one character per edit, moving its cursor with every character); the others read and move their cursor now and then. Each run has 10 seconds of warm-up, a window of 60 seconds that is measured, and 5 seconds for what is still in flight to arrive. The editors are headless (`yjs` and `socket.io-client`, speaking the real sync and awareness protocol), spread over 2, 3 and 5 processes for 50, 100 and 200 editors; each process records its own event-loop delay, and a run in which the generator lagged would have been invalid. Three runs per size, made in rounds.
+
+**What the runs show.** In all of them nobody was disconnected, refused or sent a `rejected` notice, the server logged no warning, every delivery arrived exactly once, every editor and the database ended with the same document, so the default limits did not throttle this load. The latency is to the receiving `Y.Doc`, so it does not include rendering in a browser. Latency and server CPU grow with the number of editors, because every edit and every cursor move is sent to everyone else; the server used less than one core at every size, and the memory it needed is in the table.
+
+**Not measured.** Browsers (rendering, TipTap, ProseMirror); any real network (WAN, TLS, a proxy or load balancer, Wi-Fi); more than one server instance, and more than one document at a time; a large or old document (the log is short and the snapshot small); read-only viewers; the server's event-loop lag and the CPU and memory of Redis and PostgreSQL (only the server process was sampled); editors that reconnect during a run; runs longer than a minute or two; sizes above 200 editors.
+
+To measure again, see [Reproducing](docs/benchmarks.md#reproducing).
 
 ## Layout
 
-| Path                 | What it is                                                                                                                                                  |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`           | Next.js app: pages, Auth.js, the REST API, the Prisma schema and migrations                                                                                 |
-| `apps/collab`        | The Socket.IO collaboration server                                                                                                                          |
-| `packages/shared`    | Role rules (`can`), the collaboration token signer and verifier, shared types                                                                               |
-| `docs/design`        | Decision records                                                                                                                                            |
-| `docs/images`        | README screenshots, produced by the e2e tests                                                                                                               |
-| `scripts`            | `preflight.sh`, the hygiene check, `lighthouse/` (the Lighthouse job's seed, auth and summary scripts) and `docker/` (the test database for docker-compose) |
-| `lighthouserc.cjs`   | Lighthouse CI configuration: the pages, the thresholds, the desktop and mobile presets                                                                      |
-| `docker-compose.yml` | PostgreSQL 17 and Redis 7 for development                                                                                                                   |
+| Path                 | What it is                                                                                                                                                                                            |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`           | Next.js app: pages, Auth.js, the REST API, the Prisma schema and migrations                                                                                                                           |
+| `apps/collab`        | The Socket.IO collaboration server; `bench/` holds the load test and its committed results                                                                                                            |
+| `packages/shared`    | Role rules (`can`), the collaboration token signer and verifier, shared types                                                                                                                         |
+| `docs/design`        | Decision records                                                                                                                                                                                      |
+| `docs/benchmarks.md` | What the latency claim means, the measurement protocol, and how to repeat it                                                                                                                          |
+| `docs/images`        | README screenshots, produced by the e2e tests                                                                                                                                                         |
+| `scripts`            | `preflight.sh`, the hygiene check, `lighthouse/` (the Lighthouse job's seed, auth and summary scripts), `benchmarks/` (the README numbers check) and `docker/` (the test database for docker-compose) |
+| `lighthouserc.cjs`   | Lighthouse CI configuration: the pages, the thresholds, the desktop and mobile presets                                                                                                                |
+| `docker-compose.yml` | PostgreSQL 17 and Redis 7 for development                                                                                                                                                             |
 
 The workspaces are managed with **npm workspaces**, not pnpm: the machine this was built on has neither pnpm nor corepack, and nothing here needs more than npm offers.
 
@@ -218,7 +248,7 @@ npm test                # unit, route and collab server tests; they use PostgreS
 npm run preflight       # everything CI runs
 ```
 
-`scripts/preflight.sh` creates `collabdocs_test` if it is missing and uses it when `DATABASE_URL` is unset; `REDIS_URL` defaults to `redis://localhost:6379`. Set `REDIS_URL` before `npm test`. A test that cannot reach PostgreSQL or Redis fails; it does not skip. The collab server tests start real servers in process on random ports and use their own Redis channel names. CI runs the same steps with PostgreSQL and Redis as service containers.
+`scripts/preflight.sh` creates `collabdocs_test` if it is missing and uses it when `DATABASE_URL` is unset; `REDIS_URL` defaults to `redis://localhost:6379`. Set `REDIS_URL` before `npm test`. A test that cannot reach PostgreSQL or Redis fails; it does not skip. `apps/collab/test/convergence.test.ts` is a property test (fast-check): it prints its seed and run count, and `FC_SEED=<seed> FC_RUNS=<runs> npx vitest run test/convergence.test.ts` repeats a failure. The collab server tests start real servers in process on random ports and use their own Redis channel names. CI runs the same steps with PostgreSQL and Redis as service containers.
 
 ## End-to-end tests
 

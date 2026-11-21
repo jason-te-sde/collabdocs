@@ -49,6 +49,7 @@ npm run --silent db:drift -w apps/web
 
 step "tests"
 npm run --silent test:scripts
+node scripts/benchmarks/readme-numbers.mjs
 npm run --silent test
 
 step "build"
