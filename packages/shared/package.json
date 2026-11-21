@@ -1,0 +1,21 @@
+{
+  "name": "@collabdocs/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Types, the permission rules and the collaboration token verifier, used by the web app and the collab server.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./permissions": "./src/permissions.ts",
+    "./collab-protocol": "./src/collab-protocol.ts",
+    "./redis-auth": "./src/redis-auth.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jose": "6.2.18"
+  }
+}

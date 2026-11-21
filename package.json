@@ -1,0 +1,39 @@
+{
+  "name": "collabdocs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A real-time collaborative document editor: Yjs over Socket.IO, with roles checked on every route and socket event.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "db:migrate": "npm run db:migrate -w apps/web",
+    "db:deploy": "npm run db:deploy -w apps/web",
+    "hygiene": "node scripts/check-hygiene.mjs",
+    "preflight": "bash scripts/preflight.sh",
+    "test:scripts": "node --test scripts/check-hygiene.test.mjs scripts/lighthouse/summarize.test.mjs scripts/lighthouse/readme-table.test.mjs scripts/benchmarks/readme-numbers.test.mjs",
+    "test:e2e": "npm run test:e2e -w apps/web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "1.65.1",
+    "@types/node": "26.4.0",
+    "eslint": "^9.39.5",
+    "globals": "^16.0.0",
+    "prettier": "3.10.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "5.1.1"
+  }
+}

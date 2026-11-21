@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "label": "100-run2",
+  "protocol": "docs/benchmarks.md",
+  "startedAt": "2026-11-21T12:25:14.506Z",
+  "wallSeconds": 79.305,
+  "quietCheck": {
+    "skipped": false,
+    "quiet": true,
+    "waitedSeconds": 2.598,
+    "idlePercent": 93.86,
+    "busiestProcessPercent": 4.8
+  },
+  "commit": "f000b551004f354db33678bfca96f014a37737ec",
+  "dirty": false,
+  "nodeVersion": "v25.6.1",
+  "machine": {
+    "cpu": "Apple M2",
+    "cores": 8,
+    "ramGiB": 16,
+    "platform": "Darwin 25.6.0 arm64"
+  },
+  "loadAverage": {
+    "m1": 1.89453125,
+    "m5": 2.13232421875,
+    "m15": 1.96142578125
+  },
+  "services": {
+    "postgres": "17.10 (Homebrew)",
+    "redis": "8.10.3"
+  },
+  "parameters": {
+    "editors": 100,
+    "writers": 20,
+    "readers": 80,
+    "scenario": "one-in-five",
+    "writerShare": 0.2,
+    "editsPerSecondPerWriter": 3,
+    "readerCursorIntervalMs": 5000,
+    "warmupSeconds": 10,
+    "durationSeconds": 60,
+    "drainSeconds": 5,
+    "generatorProcesses": 3,
+    "editorsPerGeneratorProcess": 34,
+    "server": {
+      "command": "node --import tsx src/main.ts",
+      "nodeEnv": "production",
+      "redisAdapter": true,
+      "postgresPersistence": true,
+      "limits": "defaults",
+      "instances": 1
+    }
+  },
+  "traffic": {
+    "editsInWindow": 3585,
+    "editsPerSecond": 59.75,
+    "syncMessagesDeliveredPerSecond": 5915.25,
+    "awarenessMessagesDeliveredPerSecond": 7501.9
+  },
+  "latencyMs": {
+    "count": 354915,
+    "min": 0.60693359375,
+    "p50": 2.35888671875,
+    "p95": 6.0283203125,
+    "p99": 8.998291015625,
+    "max": 24.004638671875,
+    "mean": 2.856378568416029
+  },
+  "latencyHistogram": {
+    "<=1": 1928,
+    "<=2": 121834,
+    "<=5": 196918,
+    "<=10": 31752,
+    "<=20": 2384,
+    "<=50": 99,
+    "<=100": 0,
+    "<=200": 0,
+    "<=500": 0,
+    "<=1000": 0,
+    ">1000": 0
+  },
+  "delivery": {
+    "expected": 354915,
+    "observed": 354915,
+    "missing": 0,
+    "duplicates": 0,
+    "unmatched": 0,
+    "negative": 0
+  },
+  "server": {
+    "rssMiB": {
+      "idleAfterStart": 97.578125,
+      "afterConnecting": 111.484375,
+      "windowMax": 203.546875,
+      "windowEnd": 203.546875
+    },
+    "cpuPercentOfOneCore": {
+      "windowMean": 23.448416671004335,
+      "windowPeakOneSecond": 28.99686386457724
+    },
+    "samples": 59
+  },
+  "clockSkewBetweenGeneratorsAndOrchestrator": [
+    {
+      "process": 0,
+      "offsetMs": 0.01611328125,
+      "uncertaintyMs": 0.0096435546875
+    },
+    {
+      "process": 1,
+      "offsetMs": 0.016845703125,
+      "uncertaintyMs": 0.009765625
+    },
+    {
+      "process": 2,
+      "offsetMs": 0.0166015625,
+      "uncertaintyMs": 0.00927734375
+    }
+  ],
+  "generator": [
+    {
+      "process": 0,
+      "eventLoopDelayMs": {
+        "p50": 1.223666999998386,
+        "p99": 1.9534999999959837,
+        "max": 61.93404200000077,
+        "mean": 0.8474686142004992,
+        "maxAtMs": 36811.760167,
+        "samples": 10394
+      },
+      "cpuPercentOfOneCore": 19.454206666666668
+    },
+    {
+      "process": 1,
+      "eventLoopDelayMs": {
+        "p50": 1.2235829999990528,
+        "p99": 1.977416000008816,
+        "max": 62.818584000000556,
+        "mean": 0.8442627297193243,
+        "maxAtMs": 36812.273167,
+        "samples": 10404
+      },
+      "cpuPercentOfOneCore": 19.839551666666665
+    },
+    {
+      "process": 2,
+      "eventLoopDelayMs": {
+        "p50": 1.1928339999976743,
+        "p99": 1.9465830000044662,
+        "max": 61.68195900000137,
+        "mean": 0.8430290580769121,
+        "maxAtMs": 36811.38575,
+        "samples": 10400
+      },
+      "cpuPercentOfOneCore": 18.86728166666667
+    }
+  ],
+  "integrity": {
+    "editorsWithTheCommonFinalDocument": 100,
+    "databaseHoldsTheFinalDocument": true,
+    "disconnects": 0,
+    "rejections": 0,
+    "refusedHandshakes": 0,
+    "serverWarningsAndErrors": 0
+  },
+  "verdict": {
+    "status": "valid",
+    "invalid": [],
+    "failed": []
+  }
+}

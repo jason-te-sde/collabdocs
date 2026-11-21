@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "label": "allwrite-100-run2",
+  "protocol": "docs/benchmarks.md",
+  "startedAt": "2026-11-21T06:24:37.470Z",
+  "wallSeconds": 79.611,
+  "quietCheck": {
+    "skipped": false,
+    "quiet": true,
+    "waitedSeconds": 2.573,
+    "idlePercent": 96.55,
+    "busiestProcessPercent": 4
+  },
+  "commit": "2c1c3cb69e35e2977ae79f7b32e3f6531efd2f71",
+  "dirty": false,
+  "nodeVersion": "v25.6.1",
+  "machine": {
+    "cpu": "Apple M2",
+    "cores": 8,
+    "ramGiB": 16,
+    "platform": "Darwin 25.6.0 arm64"
+  },
+  "loadAverage": {
+    "m1": 2.77978515625,
+    "m5": 2.66796875,
+    "m15": 2.26513671875
+  },
+  "services": {
+    "postgres": "17.10 (Homebrew)",
+    "redis": "8.10.3"
+  },
+  "parameters": {
+    "editors": 100,
+    "writers": 100,
+    "readers": 0,
+    "scenario": "all-write",
+    "writerShare": 1,
+    "editsPerSecondPerWriter": 3,
+    "readerCursorIntervalMs": 5000,
+    "warmupSeconds": 10,
+    "durationSeconds": 60,
+    "drainSeconds": 5,
+    "generatorProcesses": 3,
+    "editorsPerGeneratorProcess": 34,
+    "server": {
+      "command": "node --import tsx src/main.ts",
+      "nodeEnv": "production",
+      "redisAdapter": true,
+      "postgresPersistence": true,
+      "limits": "defaults",
+      "instances": 1
+    }
+  },
+  "traffic": {
+    "editsInWindow": 17986,
+    "editsPerSecond": 299.76666666666665,
+    "syncMessagesDeliveredPerSecond": 29670.883333333335,
+    "awarenessMessagesDeliveredPerSecond": 29670.883333333335
+  },
+  "latencyMs": {
+    "count": 1780614,
+    "min": 0.446044921875,
+    "p50": 2.389404296875,
+    "p95": 7.91015625,
+    "p99": 15.85107421875,
+    "max": 69.196044921875,
+    "mean": 3.1846545201981593
+  },
+  "latencyHistogram": {
+    "<=1": 177216,
+    "<=2": 524095,
+    "<=5": 834742,
+    "<=10": 188779,
+    "<=20": 46274,
+    "<=50": 9234,
+    "<=100": 274,
+    "<=200": 0,
+    "<=500": 0,
+    "<=1000": 0,
+    ">1000": 0
+  },
+  "delivery": {
+    "expected": 1780614,
+    "observed": 1780614,
+    "missing": 0,
+    "duplicates": 0,
+    "unmatched": 0,
+    "negative": 0
+  },
+  "server": {
+    "rssMiB": {
+      "idleAfterStart": 102.5,
+      "afterConnecting": 112.0625,
+      "windowMax": 234.09375,
+      "windowEnd": 234.09375
+    },
+    "cpuPercentOfOneCore": {
+      "windowMean": 51.6106483090156,
+      "windowPeakOneSecond": 55.96549978345856
+    },
+    "samples": 59
+  },
+  "clockSkewBetweenGeneratorsAndOrchestrator": [
+    {
+      "process": 0,
+      "offsetMs": 0.014892578125,
+      "uncertaintyMs": 0.010986328125
+    },
+    {
+      "process": 1,
+      "offsetMs": 0.014892578125,
+      "uncertaintyMs": 0.009765625
+    },
+    {
+      "process": 2,
+      "offsetMs": 0.01416015625,
+      "uncertaintyMs": 0.0091552734375
+    }
+  ],
+  "generator": [
+    {
+      "process": 0,
+      "eventLoopDelayMs": {
+        "p50": 0.3407080000033602,
+        "p99": 3.3360000000029686,
+        "max": 28.669999999998254,
+        "mean": 0.5933950488184754,
+        "maxAtMs": 51199.880417,
+        "samples": 10918
+      },
+      "cpuPercentOfOneCore": 61.71273333333333
+    },
+    {
+      "process": 1,
+      "eventLoopDelayMs": {
+        "p50": 0.34662500000013097,
+        "p99": 3.2200419999971928,
+        "max": 19.093165999998746,
+        "mean": 0.5853326843549833,
+        "maxAtMs": 17361.623916,
+        "samples": 10930
+      },
+      "cpuPercentOfOneCore": 60.25389166666667
+    },
+    {
+      "process": 2,
+      "eventLoopDelayMs": {
+        "p50": 0.27416700000321725,
+        "p99": 2.564417000001413,
+        "max": 21.350625000002765,
+        "mean": 0.51455041382729,
+        "maxAtMs": 17393.733291,
+        "samples": 11094
+      },
+      "cpuPercentOfOneCore": 57.912105000000004
+    }
+  ],
+  "integrity": {
+    "editorsWithTheCommonFinalDocument": 100,
+    "databaseHoldsTheFinalDocument": true,
+    "disconnects": 0,
+    "rejections": 0,
+    "refusedHandshakes": 0,
+    "serverWarningsAndErrors": 0
+  },
+  "verdict": {
+    "status": "valid",
+    "invalid": [],
+    "failed": []
+  }
+}

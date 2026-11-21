@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "label": "100-run2",
+  "protocol": "docs/benchmarks.md",
+  "startedAt": "2026-11-21T14:30:55.789Z",
+  "wallSeconds": 79.318,
+  "quietCheck": {
+    "skipped": false,
+    "quiet": true,
+    "waitedSeconds": 2.602,
+    "idlePercent": 95.89,
+    "busiestProcessPercent": 4.9
+  },
+  "commit": "127e75b594517ec269c59b425b14c282c478cef9",
+  "dirty": false,
+  "nodeVersion": "v25.6.1",
+  "machine": {
+    "cpu": "Apple M2",
+    "cores": 8,
+    "ramGiB": 16,
+    "platform": "Darwin 25.6.0 arm64"
+  },
+  "loadAverage": {
+    "m1": 1.95654296875,
+    "m5": 2.0888671875,
+    "m15": 1.91796875
+  },
+  "services": {
+    "postgres": "17.10 (Homebrew)",
+    "redis": "8.10.3"
+  },
+  "parameters": {
+    "editors": 100,
+    "writers": 20,
+    "readers": 80,
+    "scenario": "one-in-five",
+    "writerShare": 0.2,
+    "editsPerSecondPerWriter": 3,
+    "readerCursorIntervalMs": 5000,
+    "warmupSeconds": 10,
+    "durationSeconds": 60,
+    "drainSeconds": 5,
+    "generatorProcesses": 3,
+    "editorsPerGeneratorProcess": 34,
+    "server": {
+      "command": "node --import tsx src/main.ts",
+      "nodeEnv": "production",
+      "redisAdapter": true,
+      "postgresPersistence": true,
+      "limits": "defaults",
+      "instances": 1
+    }
+  },
+  "traffic": {
+    "editsInWindow": 3614,
+    "editsPerSecond": 60.233333333333334,
+    "syncMessagesDeliveredPerSecond": 5963.1,
+    "awarenessMessagesDeliveredPerSecond": 7550.4
+  },
+  "latencyMs": {
+    "count": 357786,
+    "min": 0.6552734375,
+    "p50": 2.441162109375,
+    "p95": 7.141357421875,
+    "p99": 30.20263671875,
+    "max": 87.965087890625,
+    "mean": 3.6404980132480556
+  },
+  "latencyHistogram": {
+    "<=1": 1742,
+    "<=2": 113216,
+    "<=5": 195220,
+    "<=10": 39060,
+    "<=20": 3931,
+    "<=50": 2439,
+    "<=100": 2178,
+    "<=200": 0,
+    "<=500": 0,
+    "<=1000": 0,
+    ">1000": 0
+  },
+  "delivery": {
+    "expected": 357786,
+    "observed": 357786,
+    "missing": 0,
+    "duplicates": 0,
+    "unmatched": 0,
+    "negative": 0
+  },
+  "server": {
+    "rssMiB": {
+      "idleAfterStart": 102.5625,
+      "afterConnecting": 111.046875,
+      "windowMax": 212.921875,
+      "windowEnd": 212.921875
+    },
+    "cpuPercentOfOneCore": {
+      "windowMean": 25.23627267709328,
+      "windowPeakOneSecond": 31.010803812754105
+    },
+    "samples": 59
+  },
+  "clockSkewBetweenGeneratorsAndOrchestrator": [
+    {
+      "process": 0,
+      "offsetMs": 0.012451171875,
+      "uncertaintyMs": 0.0091552734375
+    },
+    {
+      "process": 1,
+      "offsetMs": 0.01513671875,
+      "uncertaintyMs": 0.009765625
+    },
+    {
+      "process": 2,
+      "offsetMs": 0.0146484375,
+      "uncertaintyMs": 0.0084228515625
+    }
+  ],
+  "generator": [
+    {
+      "process": 0,
+      "eventLoopDelayMs": {
+        "p50": 1.1820829999996931,
+        "p99": 1.972750000000815,
+        "max": 220.82658399999855,
+        "mean": 0.8757537797854992,
+        "maxAtMs": 14168.765417,
+        "samples": 10349
+      },
+      "cpuPercentOfOneCore": 20.49245833333333
+    },
+    {
+      "process": 1,
+      "eventLoopDelayMs": {
+        "p50": 1.2107079999987036,
+        "p99": 2.0182910000003176,
+        "max": 220.80975000000035,
+        "mean": 0.8783941944901071,
+        "maxAtMs": 14168.761459,
+        "samples": 10345
+      },
+      "cpuPercentOfOneCore": 20.62646666666667
+    },
+    {
+      "process": 2,
+      "eventLoopDelayMs": {
+        "p50": 1.2266249999956926,
+        "p99": 1.9520839999986492,
+        "max": 219.7277920000015,
+        "mean": 0.8845471710411658,
+        "maxAtMs": 14168.792417,
+        "samples": 10325
+      },
+      "cpuPercentOfOneCore": 19.194021666666668
+    }
+  ],
+  "integrity": {
+    "editorsWithTheCommonFinalDocument": 100,
+    "databaseHoldsTheFinalDocument": true,
+    "disconnects": 0,
+    "rejections": 0,
+    "refusedHandshakes": 0,
+    "serverWarningsAndErrors": 0
+  },
+  "verdict": {
+    "status": "valid",
+    "invalid": [],
+    "failed": []
+  }
+}
