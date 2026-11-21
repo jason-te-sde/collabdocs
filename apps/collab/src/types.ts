@@ -1,5 +1,6 @@
 import type { RejectedNotice, RevokedNotice, Role } from "@collabdocs/shared";
 import type { Server, Socket } from "socket.io";
+import type { RateLimiter } from "./limits";
 
 export interface ClientToServerEvents {
   sync: (data: unknown) => void;
@@ -16,7 +17,7 @@ export interface ServerToClientEvents {
 /** What one instance tells the others about a document it holds. */
 export type RelayKind = "update" | "awareness";
 
-/** The adapter's server-to-server events are not used; Yjs traffic has its own channel. */
+/** There are no server-to-server Socket.IO events: instances talk through the relay channel in `relay.ts`. */
 export type InterServerEvents = Record<string, never>;
 
 /** The origin attached to Yjs transactions that a client's message caused. */
@@ -32,14 +33,16 @@ export interface ClientOrigin {
 export interface SocketData {
   documentId: string;
   userId: string;
-  /** The role this socket acts with: the weaker of the token's role and the membership at connect time. */
   /** The display name from the token: what other people see for this user's presence. */
   name: string;
+  /** The role this socket acts with: the weaker of the token's role and the membership at connect time. */
   role: Role;
   /** The membership role found in the database at connect time. */
   memberRole: Role;
   /** When the membership was last read from the database for this socket (ms since the epoch). */
   roleCheckedAt: number;
+  /** This socket's byte budget: what it sends, and what the server sends it in reply. */
+  byteBudget: RateLimiter;
   origin: ClientOrigin;
 }
 

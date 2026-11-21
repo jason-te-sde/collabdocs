@@ -13,6 +13,7 @@ import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
 import type { Limits, PersistenceOptions } from "./config";
 import { errorFields, type Logger } from "./logger";
+import { bufferedBytes, dropSocket } from "./outbound";
 import type { DocumentStore } from "./store";
 import type { ClientOrigin, CollabIo, CollabSocket, RelayKind } from "./types";
 
@@ -35,6 +36,12 @@ export interface DocumentDeps {
   limits: Limits;
   /** Sends a message to the other instances. A no-op when the server runs alone. */
   relay: (documentId: string, kind: RelayKind, data: Uint8Array, userId?: string) => void;
+  /**
+   * Charges bytes the server is about to send in answer to a socket's request to that
+   * socket's and its user's byte budgets (the ones inbound messages use). False when
+   * either is spent.
+   */
+  chargeOutbound: (socket: CollabSocket, bytes: number) => boolean;
   /** Called once when the entry is gone, so the registry can forget it. */
   onGone: (entry: DocumentEntry) => void;
 }
@@ -78,13 +85,6 @@ function parseAwareness(bytes: Uint8Array): AwarenessEntry[] | null {
   }
 }
 
-function encodeSync(write: (encoder: encoding.Encoder) => void): Uint8Array {
-  const encoder = encoding.createEncoder();
-  write(encoder);
-  return encoding.toUint8Array(encoder);
-}
-
-type State = "loading" | "ready" | "closing" | "gone";
 /** The inverse of `parseAwareness`, in the y-protocols wire format. */
 function encodeAwarenessEntries(entries: AwarenessEntry[]): Uint8Array {
   const encoder = encoding.createEncoder();
@@ -97,6 +97,13 @@ function encodeAwarenessEntries(entries: AwarenessEntry[]): Uint8Array {
   return encoding.toUint8Array(encoder);
 }
 
+function encodeSync(write: (encoder: encoding.Encoder) => void): Uint8Array {
+  const encoder = encoding.createEncoder();
+  write(encoder);
+  return encoding.toUint8Array(encoder);
+}
+
+type State = "loading" | "ready" | "closing" | "gone";
 
 /**
  * One document held in memory by one instance: its Y.Doc, its awareness state,
@@ -285,7 +292,44 @@ export class DocumentEntry {
       reason,
       ...(detail ? { detail } : {}),
     });
-    socket.emit(COLLAB_EVENTS.rejected, { event, reason });
+    if (!this.shedIfBacklogged(socket)) socket.emit(COLLAB_EVENTS.rejected, { event, reason });
+  }
+
+  /**
+   * Closes the socket, at once, when the client is not taking what is sent to it and more
+   * than `maxOutboundBytes` is queued for it. Every emit that a client can cause or that
+   * reaches many clients is preceded by this check, so the memory held for one socket
+   * stays near the cap plus one message, however slowly the client reads. Returns whether
+   * the socket was closed.
+   */
+  private shedIfBacklogged(socket: CollabSocket): boolean {
+    if (!socket.connected) return false;
+    const queued = bufferedBytes(socket);
+    if (queued <= this.deps.limits.maxOutboundBytes) return false;
+    this.deps.logger.warn("outbound queue over the cap; disconnecting", {
+      documentId: this.id,
+      userId: socket.data.userId,
+      queuedBytes: queued,
+    });
+    dropSocket(socket);
+    return true;
+  }
+
+  /** Sends a sync reply to the socket that asked for it, within its limits. */
+  private reply(socket: CollabSocket, message: Uint8Array): void {
+    if (this.shedIfBacklogged(socket)) return;
+    // A step 1 costs the sender three bytes and the server a copy of the document, so the
+    // answer is charged like a message the socket had sent: otherwise step 1 amplifies.
+    if (!this.deps.chargeOutbound(socket, message.byteLength)) {
+      this.deps.logger.warn("byte budget exceeded by replies; disconnecting", {
+        documentId: this.id,
+        userId: socket.data.userId,
+        replyBytes: message.byteLength,
+      });
+      dropSocket(socket);
+      return;
+    }
+    socket.emit(COLLAB_EVENTS.sync, message);
   }
 
   /** A y-protocols sync message. Step 1 needs `read`; step 2 and update need `write`. */
@@ -308,16 +352,16 @@ export class DocumentEntry {
     switch (type) {
       case syncProtocol.messageYjsSyncStep1: {
         if (!can(socket.data.role, "read")) return this.reject(socket, event, "forbidden");
+        let message: Uint8Array;
         try {
           const stateVector = decoding.readVarUint8Array(decoder);
-          socket.emit(
-            COLLAB_EVENTS.sync,
-            encodeSync((encoder) => syncProtocol.writeSyncStep2(encoder, this.doc, stateVector)),
+          message = encodeSync((encoder) =>
+            syncProtocol.writeSyncStep2(encoder, this.doc, stateVector),
           );
         } catch {
-          this.reject(socket, event, "malformed", "bad state vector");
+          return this.reject(socket, event, "malformed", "bad state vector");
         }
-        return;
+        return this.reply(socket, message);
       }
       case syncProtocol.messageYjsSyncStep2:
       case syncProtocol.messageYjsUpdate: {
@@ -455,6 +499,11 @@ export class DocumentEntry {
     if (origin.awarenessIds.size + fresh > MAX_AWARENESS_IDS_PER_SOCKET) {
       return this.reject(socket, event, "forbidden", "too many client ids");
     }
+    for (const entry of entries) {
+      if (entry.state === null) continue; // a removal needs no identity, only ownership
+      const problem = this.vouchFor(socket, entry);
+      if (problem) return this.reject(socket, event, problem.reason, problem.detail);
+    }
     // The user's earlier socket may still hold these ids (a reconnect that overtook
     // the old socket's close): they move to this socket, so the old one's close
     // does not erase them.
@@ -471,6 +520,30 @@ export class DocumentEntry {
     } catch (error) {
       this.reject(socket, event, "malformed", errorFields(error).detail as string);
     }
+  }
+
+  /**
+   * Checks that a presence state names the socket's own user and puts the name from
+   * the token into it. Returns why the state is refused, or null when it passes (the
+   * entry is then rewritten in place).
+   */
+  private vouchFor(
+    socket: CollabSocket,
+    entry: AwarenessEntry,
+  ): { reason: RejectReason; detail: string } | null {
+    const { state } = entry;
+    if (typeof state !== "object" || state === null || Array.isArray(state)) {
+      return { reason: "malformed", detail: "presence state is not an object" };
+    }
+    const user = (state as { user?: unknown }).user;
+    if (typeof user !== "object" || user === null || Array.isArray(user)) {
+      return { reason: "forbidden", detail: "presence carries no user" };
+    }
+    if ((user as { id?: unknown }).id !== socket.data.userId) {
+      return { reason: "forbidden", detail: "presence names another user" };
+    }
+    entry.state = { ...state, user: { ...user, name: socket.data.name } };
+    return null;
   }
 
   // ---- messages from other instances and from the database ---------------
@@ -503,11 +576,6 @@ export class DocumentEntry {
    * Reads the log past this entry's cursor and applies what it finds. Pub/sub is
    * at-most-once; this makes it a latency optimisation rather than the thing
    * convergence depends on. Applying an update twice is a no-op in Yjs.
-    for (const entry of entries) {
-      if (entry.state === null) continue; // a removal needs no identity, only ownership
-      const problem = this.vouchFor(socket, entry);
-      if (problem) return this.reject(socket, event, problem.reason, problem.detail);
-    }
    */
   private async reconcile(): Promise<void> {
     if (this.state !== "ready") return;
@@ -522,30 +590,6 @@ export class DocumentEntry {
           this.deps.logger.error("stored update could not be applied", {
             documentId: this.id,
             seq: row.seq,
-  /**
-   * Checks that a presence state names the socket's own user and puts the name from
-   * the token into it. Returns why the state is refused, or null when it passes (the
-   * entry is then rewritten in place).
-   */
-  private vouchFor(
-    socket: CollabSocket,
-    entry: AwarenessEntry,
-  ): { reason: RejectReason; detail: string } | null {
-    const { state } = entry;
-    if (typeof state !== "object" || state === null || Array.isArray(state)) {
-      return { reason: "malformed", detail: "presence state is not an object" };
-    }
-    const user = (state as { user?: unknown }).user;
-    if (typeof user !== "object" || user === null || Array.isArray(user)) {
-      return { reason: "forbidden", detail: "presence carries no user" };
-    }
-    if ((user as { id?: unknown }).id !== socket.data.userId) {
-      return { reason: "forbidden", detail: "presence names another user" };
-    }
-    entry.state = { ...state, user: { ...user, name: socket.data.name } };
-    return null;
-  }
-
             ...errorFields(error),
           });
         }
@@ -633,6 +677,9 @@ export class DocumentEntry {
   };
 
   private emitLocal(event: "sync" | "awareness", data: Uint8Array, exceptSocketId?: string): void {
+    // A broadcast is queued for every socket of the room, including one that has stopped
+    // reading: close those first, so nothing more is added to their queues.
+    for (const socket of [...this.sockets]) this.shedIfBacklogged(socket);
     let target = this.deps.io.local.to(this.room);
     if (exceptSocketId) target = target.except(exceptSocketId);
     target.emit(event, data);

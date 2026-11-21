@@ -42,6 +42,13 @@ export interface Limits {
   maxPendingBytes: number;
   /** The largest accepted awareness update, in bytes. */
   maxAwarenessBytes: number;
+  /**
+   * The most bytes the server may hold queued for one socket, that the client has not
+   * taken. Checked before every send to a socket; a socket over it is disconnected.
+   * One message is added to a queue after the check, so a queue can reach this plus
+   * one message (a reply for a document, at most `maxDocumentBytes`).
+   */
+  maxOutboundBytes: number;
 }
 
 export interface PersistenceOptions {
@@ -65,7 +72,7 @@ export interface CollabServerOptions {
   host?: string;
   databaseUrl: string;
   tokenSecret: string;
-  /** Without it the server runs alone: no adapter, no membership channel. */
+  /** Without it the server runs alone: no relay, no membership channel, counters in memory. */
   redisUrl?: string;
   /**
    * Signs the messages on the Redis channels. Required with `redisUrl`; at least 32
@@ -89,7 +96,11 @@ export interface CollabServerOptions {
   trustedProxyHopsConfigured: boolean;
   /** Most distinct keys one rate limiter keeps buckets for; past it the least recently used go. */
   rateLimiterMaxKeys: number;
-  /** Allowed browser origin for the socket handshake; unset allows none (same-origin only). */
+  /**
+   * Browser origins allowed to open a socket, on the WebSocket upgrade and on polling
+   * requests. Unset, only the server's own origin is allowed. A request that carries
+   * no Origin header (not a browser) is not affected: the token is its credential.
+   */
   corsOrigin?: string | string[];
   limits: Limits;
   persistence: PersistenceOptions;
@@ -117,6 +128,9 @@ export const DEFAULT_LIMITS: Limits = {
   maxDocumentBytes: 16 * 1024 * 1024,
   maxPendingBytes: 8 * 1024 * 1024,
   maxAwarenessBytes: 8 * 1024,
+  // Four times the default `maxUpdateBytes`: room for a few of the largest updates to be
+  // in flight to a slow client, and no more.
+  maxOutboundBytes: 4 * 1024 * 1024,
 };
 
 export const DEFAULT_PERSISTENCE: PersistenceOptions = {
@@ -242,6 +256,7 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv): CollabServerOptions {
       maxDocumentBytes: number(env, "COLLAB_MAX_DOCUMENT_BYTES"),
       maxPendingBytes: number(env, "COLLAB_MAX_PENDING_BYTES"),
       maxAwarenessBytes: number(env, "COLLAB_MAX_AWARENESS_BYTES"),
+      maxOutboundBytes: number(env, "COLLAB_MAX_OUTBOUND_BYTES"),
     }),
     persistence: defined({
       compactEveryUpdates: number(env, "COLLAB_COMPACT_EVERY_UPDATES"),

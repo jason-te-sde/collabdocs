@@ -1,6 +1,6 @@
-import { createServer, type Server as HttpServer } from "node:http";
+import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket as NetSocket } from "node:net";
 import {
   COLLAB_EVENTS,
   ROLES,
@@ -41,6 +41,13 @@ export interface CollabServer {
 const FRAME_OVERHEAD_BYTES = 1024;
 /** Real collaboration tokens are a few hundred bytes; longer ones are refused unparsed. */
 export const MAX_TOKEN_CHARS = 2048;
+
+/**
+ * At shutdown, how long a client gets to close its socket before the connection is cut.
+ * A client that does not read never answers the close handshake, and the documents are
+ * written without waiting for it either way.
+ */
+const SHUTDOWN_SOCKET_GRACE_MS = 1000;
 
 /** How long a command to Redis may take before it fails. */
 const REDIS_COMMAND_TIMEOUT_MS = 1500;
@@ -112,9 +119,41 @@ export async function startCollabServer(
     }
     response.writeHead(404).end();
   });
+  /** Every open TCP connection, so that shutdown can cut the ones a client keeps open. */
+  const openConnections = new Set<NetSocket>();
+  httpServer.on("connection", (connection) => {
+    openConnections.add(connection);
+    connection.once("close", () => openConnections.delete(connection));
+  });
+  const allowedOrigins = options.corsOrigin === undefined ? null : [options.corsOrigin].flat();
+  /**
+   * Whether a request may open a connection, for a polling request and for a WebSocket
+   * upgrade alike (the `cors` option below covers polling only). A request without an
+   * Origin header does not come from a browser; the token is its credential. A browser
+   * request must come from a configured origin, or, when none is configured, from the
+   * server's own origin.
+   */
+  const originAllowed = (request: IncomingMessage): boolean => {
+    const origin = request.headers.origin;
+    if (origin === undefined) return true;
+    if (allowedOrigins) return allowedOrigins.includes(origin);
+    try {
+      return new URL(origin).host === request.headers.host;
+    } catch {
+      return false;
+    }
+  };
   const io: CollabIo = new Server(httpServer, {
     maxHttpBufferSize: limits.maxUpdateBytes + FRAME_OVERHEAD_BYTES,
     cors: options.corsOrigin ? { origin: options.corsOrigin } : undefined,
+    allowRequest: (request, callback) => {
+      if (originAllowed(request)) return callback(null, true);
+      logger.warn("connection refused: origin not allowed", {
+        origin: String(request.headers.origin).slice(0, 200),
+        instance: instanceId,
+      });
+      callback("origin not allowed", false);
+    },
     // The editor sends Yjs binary; compression of small frames costs more than it saves.
     perMessageDeflate: false,
   });
@@ -223,6 +262,11 @@ export async function startCollabServer(
     logger,
     persistence: options.persistence,
     limits,
+    // The most a single reply can cost is the whole bucket: a document larger than the
+    // burst must still be openable, by a socket whose bucket is full.
+    chargeOutbound: (socket, bytes) =>
+      socket.data.byteBudget.allow(Math.min(bytes, limits.byteBurst)) &&
+      bytesByUser.allow(socket.data.userId, Math.min(bytes, limits.byteBurstPerUser)),
     relay: (documentId, kind, data, userId) => {
       try {
         relay(documentId, kind, data, userId);
@@ -365,9 +409,11 @@ export async function startCollabServer(
       socket.data = {
         documentId,
         userId: claims.userId,
+        name: claims.name,
         role: weaker(claims.role, memberRole),
         memberRole,
         roleCheckedAt: Date.now(),
+        byteBudget: new RateLimiter(limits.maxBytesPerSecond, limits.byteBurst),
         origin: {
           kind: "client",
           socketId: socket.id,
@@ -383,9 +429,8 @@ export async function startCollabServer(
   });
 
   io.on("connection", (socket: CollabSocket) => {
-    const { documentId, userId, role } = socket.data;
+    const { documentId, userId, role, byteBudget } = socket.data;
     const limiter = new RateLimiter(limits.maxMessagesPerSecond, limits.messageBurst);
-    const byteBudget = new RateLimiter(limits.maxBytesPerSecond, limits.byteBurst);
     logger.info("socket connected", { documentId, userId, role, instance: instanceId });
 
     // Load (or find) the document. Events that arrive meanwhile wait on this promise,
@@ -409,7 +454,6 @@ export async function startCollabServer(
     );
     const onEvent =
       (handle: "onSync" | "onAwareness") =>
-        name: claims.name,
       (payload: unknown): void => {
         // Both budgets are checked on arrival, before anything is queued, so a flood
         // while the document loads cannot grow memory.
@@ -443,6 +487,17 @@ export async function startCollabServer(
           }
         });
       };
+    // Only two events exist. Any other name would reach no handler and so no limit; a
+    // client that sends one is not an editor, and is closed.
+    socket.use(([event], next) => {
+      if (event === COLLAB_EVENTS.sync || event === COLLAB_EVENTS.awareness) return next();
+      logger.warn("unknown event; disconnecting", {
+        documentId,
+        userId,
+        event: String(event).slice(0, 64),
+      });
+      socket.disconnect(true);
+    });
     socket.on(COLLAB_EVENTS.sync, onEvent("onSync"));
     socket.on(COLLAB_EVENTS.awareness, onEvent("onAwareness"));
 
@@ -465,8 +520,19 @@ export async function startCollabServer(
   let closing: Promise<void> | null = null;
   const close = (): Promise<void> => {
     closing ??= (async () => {
-      await io.close();
-      await registry.closeAll();
+      // The documents are written while the sockets close, not after: a client that does
+      // not read keeps its socket open until the transport is cut, and must not delay
+      // persistence. Sockets that are still open after the grace period are cut.
+      const cut = setTimeout(() => {
+        // Engine.IO has already let go of these sockets, but the TCP connection stays
+        // until the peer answers the close handshake (30 s in `ws`).
+        for (const connection of openConnections) connection.destroy();
+      }, SHUTDOWN_SOCKET_GRACE_MS);
+      try {
+        await Promise.all([io.close(), registry.closeAll()]);
+      } finally {
+        clearTimeout(cut);
+      }
       await store.close();
       for (const cleanup of cleanups) await cleanup();
     })();
