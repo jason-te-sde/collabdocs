@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "label": "allwrite-100-run1",
+  "protocol": "docs/benchmarks.md",
+  "startedAt": "2026-11-21T14:38:57.535Z",
+  "wallSeconds": 79.597,
+  "quietCheck": {
+    "skipped": false,
+    "quiet": true,
+    "waitedSeconds": 2.628,
+    "idlePercent": 94.33,
+    "busiestProcessPercent": 6.1
+  },
+  "commit": "127e75b594517ec269c59b425b14c282c478cef9",
+  "dirty": false,
+  "nodeVersion": "v25.6.1",
+  "machine": {
+    "cpu": "Apple M2",
+    "cores": 8,
+    "ramGiB": 16,
+    "platform": "Darwin 25.6.0 arm64"
+  },
+  "loadAverage": {
+    "m1": 2.68505859375,
+    "m5": 2.646484375,
+    "m15": 2.32568359375
+  },
+  "services": {
+    "postgres": "17.10 (Homebrew)",
+    "redis": "8.10.3"
+  },
+  "parameters": {
+    "editors": 100,
+    "writers": 100,
+    "readers": 0,
+    "scenario": "all-write",
+    "writerShare": 1,
+    "editsPerSecondPerWriter": 3,
+    "readerCursorIntervalMs": 5000,
+    "warmupSeconds": 10,
+    "durationSeconds": 60,
+    "drainSeconds": 5,
+    "generatorProcesses": 3,
+    "editorsPerGeneratorProcess": 34,
+    "server": {
+      "command": "node --import tsx src/main.ts",
+      "nodeEnv": "production",
+      "redisAdapter": true,
+      "postgresPersistence": true,
+      "limits": "defaults",
+      "instances": 1
+    }
+  },
+  "traffic": {
+    "editsInWindow": 18008,
+    "editsPerSecond": 300.1333333333333,
+    "syncMessagesDeliveredPerSecond": 29716.9,
+    "awarenessMessagesDeliveredPerSecond": 29716.983333333334
+  },
+  "latencyMs": {
+    "count": 1782792,
+    "min": 0.453369140625,
+    "p50": 2.487548828125,
+    "p95": 8.059326171875,
+    "p99": 15.869384765625,
+    "max": 66.462890625,
+    "mean": 3.2684407830898983
+  },
+  "latencyHistogram": {
+    "<=1": 162920,
+    "<=2": 504480,
+    "<=5": 849375,
+    "<=10": 209558,
+    "<=20": 47747,
+    "<=50": 8680,
+    "<=100": 32,
+    "<=200": 0,
+    "<=500": 0,
+    "<=1000": 0,
+    ">1000": 0
+  },
+  "delivery": {
+    "expected": 1782792,
+    "observed": 1782792,
+    "missing": 0,
+    "duplicates": 0,
+    "unmatched": 0,
+    "negative": 0
+  },
+  "server": {
+    "rssMiB": {
+      "idleAfterStart": 99.421875,
+      "afterConnecting": 118.921875,
+      "windowMax": 261.265625,
+      "windowEnd": 260.90625
+    },
+    "cpuPercentOfOneCore": {
+      "windowMean": 54.491602021296856,
+      "windowPeakOneSecond": 64.91848735828022
+    },
+    "samples": 59
+  },
+  "clockSkewBetweenGeneratorsAndOrchestrator": [
+    {
+      "process": 0,
+      "offsetMs": 0.012939453125,
+      "uncertaintyMs": 0.0098876953125
+    },
+    {
+      "process": 1,
+      "offsetMs": 0.0146484375,
+      "uncertaintyMs": 0.009765625
+    },
+    {
+      "process": 2,
+      "offsetMs": 0.014404296875,
+      "uncertaintyMs": 0.0096435546875
+    }
+  ],
+  "generator": [
+    {
+      "process": 0,
+      "eventLoopDelayMs": {
+        "p50": 0.31049999999959255,
+        "p99": 2.954041999997571,
+        "max": 20.5971669999999,
+        "mean": 0.5545799884534914,
+        "maxAtMs": 36818.891875,
+        "samples": 10999
+      },
+      "cpuPercentOfOneCore": 60.587428333333335
+    },
+    {
+      "process": 1,
+      "eventLoopDelayMs": {
+        "p50": 0.3267500000001746,
+        "p99": 3.129624999999578,
+        "max": 18.15716699999757,
+        "mean": 0.5706645480900536,
+        "maxAtMs": 35698.360708,
+        "samples": 10969
+      },
+      "cpuPercentOfOneCore": 60.18875499999999
+    },
+    {
+      "process": 2,
+      "eventLoopDelayMs": {
+        "p50": 0.2960000000020955,
+        "p99": 2.5533329999962007,
+        "max": 34.77233400000114,
+        "mean": 0.5288122319102693,
+        "maxAtMs": 38422.028334,
+        "samples": 11056
+      },
+      "cpuPercentOfOneCore": 57.737723333333335
+    }
+  ],
+  "integrity": {
+    "editorsWithTheCommonFinalDocument": 100,
+    "databaseHoldsTheFinalDocument": true,
+    "disconnects": 0,
+    "rejections": 0,
+    "refusedHandshakes": 0,
+    "serverWarningsAndErrors": 0
+  },
+  "verdict": {
+    "status": "valid",
+    "invalid": [],
+    "failed": []
+  }
+}

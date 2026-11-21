@@ -32,7 +32,7 @@ First release.
 - `.env.example` shows the real defaults (including the per-address handshake limit that it showed wrongly) and lists every variable the server reads; a test compares it with the code.
 - The README says when an update reaches the other sockets (at once on the same instance; through Redis only after the commit), lists every API route, and links to the right section; SECURITY.md describes the CSRF rules and the member list as the code behaves; operations.md has the right start command, log stream and token wording.
 - The README's performance numbers show the slowest delivery of every run, say which instrument measured the generator lag in which runs, and say that every editor typing was not measured above 100 editors.
-- The fifteen load-test runs were repeated on the release candidate, with the same protocol and default limits (every run valid and clean, nobody disconnected or refused); the earlier results are kept in `apps/collab/bench/results/earlier-before-security-fixes`.
+- The fifteen load-test runs were repeated twice on release candidates, with the same protocol and default limits, and the README's numbers come from the last set, made on commit `127e75b` (every run valid and clean: nobody disconnected, rejected or refused, and the server logged no warning). The two earlier sets are kept, unchanged, in `apps/collab/bench/results/earlier-before-security-fixes` (commits `8d8cecd` and `2c1c3cb`, before the security fixes) and `apps/collab/bench/results/earlier-before-queue-sweep` (commit `f000b55`, before the per-connection queue limits).
 - The hygiene check's deny-list no longer names any tool: it matches any co-author trailer, any line that credits a generator tool, and a vendor's no-reply address.
 
 ### Added (performance)
