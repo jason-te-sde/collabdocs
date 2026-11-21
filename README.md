@@ -97,7 +97,7 @@ Each cell is **min / median / max** of the per-run medians across 3 runs of the 
 <!-- lighthouse-table:end -->
 <!-- prettier-ignore-end -->
 
-The table is from commit `5897444` (2026-11-20). Later commits changed the collab server, which no page Lighthouse measures depends on for its score, and also the editor's provider (when it announces presence) and the token route (which now carries the display name); those two are used by the editor page, so the table predates them. The Lighthouse gate (0.92) has passed in CI on every later commit; the table was not regenerated.
+The table is from commit `5897444` (2026-11-20). Later commits changed the collab server, and also the editor's provider (when it announces presence) and the token route (which now carries the display name); those two are used by the editor page, so the table predates them. The Lighthouse gate (0.92) has passed on every CI run since; the table was not regenerated. The editor page connects to the collab server (the job waits for it to sync), so the server's changes are in the page's path even though none of them changes what the page renders.
 
 Conditions: a production build (`next build` and `next start`), the collab server, PostgreSQL 17 and Redis 7 running on the same runner, signed in as a verified user for the document list and the editor (a session cookie from `scripts/lighthouse/seed.mjs`, set by a Puppeteer script), the editor opened on a seeded document that holds five paragraphs, Lighthouse's default simulated throttling. **The gate is applied to the desktop preset and to the mobile emulation**: both pass, so both are enforced. Performance, accessibility and these conditions are in [`lighthouserc.cjs`](lighthouserc.cjs) and the `lighthouse` job of [`.github/workflows/ci.yml`](.github/workflows/ci.yml); the reports are the job's `lighthouse-reports` artifact. These scores describe a local, same-host server: the network between browser and server is not in them, and the editor page is measured with its socket connected but with nobody else in the document.
 
@@ -105,7 +105,7 @@ The scores are taken from CI, not from a laptop, because they depend on the mach
 
 ## Performance
 
-Measured by the sync-latency load test in `apps/collab/bench`, under the protocol in [docs/benchmarks.md](docs/benchmarks.md), which was committed before measuring began (the all-write scenario was added later, with its reason, in an addendum committed before it was run). Every number in this section is generated from the committed files in [`apps/collab/bench/results`](apps/collab/bench/results) by `scripts/benchmarks/readme-numbers.mjs`, which CI runs: the generated blocks below must equal what the files produce, and the hand-written text must contain no number at all. The runs were repeated on the release-candidate code after the security fixes; the results from before them are kept, unchanged, in [`apps/collab/bench/results/earlier-before-security-fixes`](apps/collab/bench/results/earlier-before-security-fixes).
+Measured by the sync-latency load test in `apps/collab/bench`, under the protocol in [docs/benchmarks.md](docs/benchmarks.md), which was committed before measuring began (the all-write scenario was added later, with its reason, in an addendum committed before it was run). Every number in this section is generated from the committed files in [`apps/collab/bench/results`](apps/collab/bench/results) by `scripts/benchmarks/readme-numbers.mjs`, which CI runs: the generated blocks below must equal what the files produce, and the hand-written text must contain no number at all. The runs were repeated on the release-candidate code after the security fixes; the earlier sets are kept, unchanged, in [`apps/collab/bench/results/earlier-before-security-fixes`](apps/collab/bench/results/earlier-before-security-fixes) and [`apps/collab/bench/results/earlier-before-queue-sweep`](apps/collab/bench/results/earlier-before-queue-sweep).
 
 <!-- performance-text:start -->
 
@@ -224,44 +224,44 @@ The web app asks for a token (`POST /api/documents/:id/collab-token`) and the cl
 
 Everything the collab server limits is an environment variable; the defaults are in the table, and [docs/operations.md](docs/operations.md) says what happens past each one and when to change it. Every limit has a test. The web app's account limits (sign-in, registration, invitations) are in [SECURITY.md](SECURITY.md).
 
-| Variable                                | Default   | Meaning                                                                                                         |
-| --------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------- |
-| `COLLAB_PORT`, `COLLAB_HOST`            | 4000, all | where it listens                                                                                                |
-| `COLLAB_CORS_ORIGIN`                    | none      | browser origins allowed to connect, comma separated (WebSocket and polling); none: only the server's own origin |
-| `COLLAB_MAX_UPDATE_BYTES`               | 1048576   | largest sync message                                                                                            |
-| `COLLAB_MAX_AWARENESS_BYTES`            | 8192      | largest awareness message                                                                                       |
-| `COLLAB_MAX_MESSAGES_PER_SECOND`        | 100       | per socket; over it the socket is disconnected                                                                  |
-| `COLLAB_MESSAGE_BURST`                  | 200       | messages a socket may send at once                                                                              |
-| `COLLAB_MAX_BYTES_PER_SECOND`           | 262144    | per socket; over it the socket is disconnected                                                                  |
-| `COLLAB_BYTE_BURST`                     | 2097152   | bytes a socket may send at once (at least the update maximum); the replies it asks for count too                |
-| `COLLAB_MAX_OUTBOUND_BYTES`             | 4194304   | queued for one connection and not yet taken by its client; over it the connection is closed                     |
-| `COLLAB_MAX_OUTBOUND_PACKETS`           | 16384     | packets queued for one connection and not yet taken by the transport; over it the connection is closed          |
-| `COLLAB_MAX_PACKETS_PER_SECOND`         | 250       | Engine.IO packets one connection may send, before or after it joins a document; over it it is closed            |
-| `COLLAB_PACKET_BURST`                   | 500       | packets a connection may send at once                                                                           |
-| `COLLAB_MAX_DOCUMENT_BYTES`             | 16777216  | snapshot plus log; past it writes are refused                                                                   |
-| `COLLAB_MAX_PENDING_BYTES`              | 8388608   | accepted but not yet stored, per document; past it, disconnect                                                  |
-| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT`   | 250       | across instances                                                                                                |
-| `COLLAB_MAX_CONNECTIONS_PER_USER`       | 8         | sockets one user may hold on one document, across instances                                                     |
-| `COLLAB_HANDSHAKE_BURST_PER_USER`       | 20        | handshakes a user may start at once, per instance                                                               |
-| `COLLAB_HANDSHAKES_PER_SECOND_PER_USER` | 1         | then this many per second; over it, `rate_limited`                                                              |
-| `COLLAB_HANDSHAKE_BURST_PER_IP`         | 2000      | anti-flood ceiling per client address (IPv6: per /64), per instance; counts only handshakes with a valid token  |
-| `COLLAB_HANDSHAKES_PER_SECOND_PER_IP`   | 100       |                                                                                                                 |
-| `COLLAB_RATE_LIMITER_MAX_KEYS`          | 100000    | users or addresses each in-memory limiter remembers; past it the least recently used are dropped and counted    |
-| `COLLAB_MAX_BYTES_PER_SECOND_PER_USER`  | 524288    | shared by all of a user's sockets, per instance                                                                 |
-| `COLLAB_BYTE_BURST_PER_USER`            | 4194304   | at least the update maximum                                                                                     |
-| `COLLAB_MAX_IN_FLIGHT_BYTES`            | 67108864  | received but not yet processed, all sockets of the instance                                                     |
-| `COLLAB_MAX_PENDING_STRUCT_BYTES`       | 1048576   | updates waiting for a missing dependency, per document                                                          |
-| `COLLAB_TRUSTED_PROXY_HOPS`             | 0         | proxies in front that append to `X-Forwarded-For` (0 ignores it); **set it behind a proxy**, see operations.md  |
-| `COLLAB_INSTANCE_ID`                    | random    | names this instance in logs and relayed messages; set it when running several                                   |
-| `REDIS_MESSAGE_SECRET`                  | none      | required with `REDIS_URL`; signs the Redis messages                                                             |
-| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`       | 5000      | start fails if Redis is not reachable within this                                                               |
-| `COLLAB_CONNECTION_TTL_MS`              | 45000     | a dead instance's connection slots expire after this                                                            |
-| `COLLAB_COMPACT_EVERY_UPDATES`          | 200       | compact the log into a snapshot after this many updates                                                         |
-| `COLLAB_COMPACT_AFTER_MS`               | 30000     | or this long after the first uncompacted update                                                                 |
-| `COLLAB_UNLOAD_GRACE_MS`                | 30000     | keep a document in memory this long after its last client left                                                  |
-| `COLLAB_RECONCILE_INTERVAL_MS`          | 5000      | how often an instance reads the log for updates it did not see                                                  |
-| `COLLAB_MEMBERSHIP_RECHECK_MS`          | 60000     | how often sockets are checked against the `Membership` table                                                    |
-| `COLLAB_ROLE_CACHE_MS`                  | 1000      | a socket's role is read again before a write if older than this                                                 |
+| Variable                                | Default   | Meaning                                                                                                        |
+| --------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
+| `COLLAB_PORT`, `COLLAB_HOST`            | 4000, all | where it listens                                                                                               |
+| `COLLAB_CORS_ORIGIN`                    | none      | browser origins allowed to connect, comma separated (WebSocket only); none: only the server's own origin       |
+| `COLLAB_MAX_UPDATE_BYTES`               | 1048576   | largest sync message                                                                                           |
+| `COLLAB_MAX_AWARENESS_BYTES`            | 8192      | largest awareness message                                                                                      |
+| `COLLAB_MAX_MESSAGES_PER_SECOND`        | 100       | per socket; over it the socket is disconnected                                                                 |
+| `COLLAB_MESSAGE_BURST`                  | 200       | messages a socket may send at once                                                                             |
+| `COLLAB_MAX_BYTES_PER_SECOND`           | 262144    | per socket; over it the socket is disconnected                                                                 |
+| `COLLAB_BYTE_BURST`                     | 2097152   | bytes a socket may send at once (at least the update maximum); the replies it asks for count too               |
+| `COLLAB_MAX_OUTBOUND_BYTES`             | 4194304   | queued for one connection and not yet taken by its client; over it the connection is closed                    |
+| `COLLAB_MAX_OUTBOUND_PACKETS`           | 16384     | packets queued for one connection and not yet taken by the transport; over it the connection is closed         |
+| `COLLAB_MAX_PACKETS_PER_SECOND`         | 250       | Engine.IO packets one connection may send, before or after it joins a document; over it it is closed           |
+| `COLLAB_PACKET_BURST`                   | 500       | packets a connection may send at once                                                                          |
+| `COLLAB_MAX_DOCUMENT_BYTES`             | 16777216  | snapshot plus log; past it writes are refused                                                                  |
+| `COLLAB_MAX_PENDING_BYTES`              | 8388608   | accepted but not yet stored, per document; past it, disconnect                                                 |
+| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT`   | 250       | across instances                                                                                               |
+| `COLLAB_MAX_CONNECTIONS_PER_USER`       | 8         | sockets one user may hold on one document, across instances                                                    |
+| `COLLAB_HANDSHAKE_BURST_PER_USER`       | 20        | handshakes a user may start at once, per instance                                                              |
+| `COLLAB_HANDSHAKES_PER_SECOND_PER_USER` | 1         | then this many per second; over it, `rate_limited`                                                             |
+| `COLLAB_HANDSHAKE_BURST_PER_IP`         | 2000      | anti-flood ceiling per client address (IPv6: per /64), per instance; counts only handshakes with a valid token |
+| `COLLAB_HANDSHAKES_PER_SECOND_PER_IP`   | 100       |                                                                                                                |
+| `COLLAB_RATE_LIMITER_MAX_KEYS`          | 100000    | users or addresses each in-memory limiter remembers; past it the least recently used are dropped and counted   |
+| `COLLAB_MAX_BYTES_PER_SECOND_PER_USER`  | 524288    | shared by all of a user's sockets, per instance                                                                |
+| `COLLAB_BYTE_BURST_PER_USER`            | 4194304   | at least the update maximum                                                                                    |
+| `COLLAB_MAX_IN_FLIGHT_BYTES`            | 67108864  | received but not yet processed, all sockets of the instance                                                    |
+| `COLLAB_MAX_PENDING_STRUCT_BYTES`       | 1048576   | updates waiting for a missing dependency, per document                                                         |
+| `COLLAB_TRUSTED_PROXY_HOPS`             | 0         | proxies in front that append to `X-Forwarded-For` (0 ignores it); **set it behind a proxy**, see operations.md |
+| `COLLAB_INSTANCE_ID`                    | random    | names this instance in logs and relayed messages; set it when running several                                  |
+| `REDIS_MESSAGE_SECRET`                  | none      | required with `REDIS_URL`; signs the Redis messages                                                            |
+| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`       | 5000      | start fails if Redis is not reachable within this                                                              |
+| `COLLAB_CONNECTION_TTL_MS`              | 45000     | a dead instance's connection slots expire after this                                                           |
+| `COLLAB_COMPACT_EVERY_UPDATES`          | 200       | compact the log into a snapshot after this many updates                                                        |
+| `COLLAB_COMPACT_AFTER_MS`               | 30000     | or this long after the first uncompacted update                                                                |
+| `COLLAB_UNLOAD_GRACE_MS`                | 30000     | keep a document in memory this long after its last client left                                                 |
+| `COLLAB_RECONCILE_INTERVAL_MS`          | 5000      | how often an instance reads the log for updates it did not see                                                 |
+| `COLLAB_MEMBERSHIP_RECHECK_MS`          | 60000     | how often sockets are checked against the `Membership` table                                                   |
+| `COLLAB_ROLE_CACHE_MS`                  | 1000      | a socket's role is read again before a write if older than this                                                |
 
 ## Security model
 

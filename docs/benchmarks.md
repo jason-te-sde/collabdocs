@@ -173,6 +173,8 @@ Why the defaults should admit this load, before the runs: a socket is sent about
 
 The results of Addendum 5 are kept, unchanged, in `apps/collab/bench/results/earlier-before-queue-sweep/` (made from commit `f000b55`), next to `earlier-before-security-fixes/`. The README's Performance section is generated from the new runs only.
 
+The results made on `127e75b` stand for the release. The changes after them (the server accepts the WebSocket transport only, and the sweep closes a connection only when it is over a cap and not draining) do not touch the per-message path, so the runs are not repeated.
+
 ### Notes that do not change any measurement
 
 - The load test edits a `Y.Text`, as in the nine runs, so that its numbers are comparable. The collab server relays Yjs updates without interpreting them, so the type of the shared structure does not change what it does. The editor's own structure is a `Y.XmlFragment` of paragraphs; the convergence test covers it.
