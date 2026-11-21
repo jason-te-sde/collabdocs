@@ -25,11 +25,14 @@ import type { CollabServer } from "../src/index";
  * server receives it, they all end with the same document, the database holds that
  * document, and nothing a client typed is lost.
  *
- * Each client inserts, deletes and formats whole tokens (`[c1:7]`), so "input" has an
+ * Each client inserts, deletes and formats whole tokens (`[c1:7]`) in a `Y.Text`, and inserts and
+ * deletes paragraphs (`Y.XmlElement`s holding one token) in a `Y.XmlFragment`, the structure the
+ * editor's TipTap binding produces; so "input" has an
  * exact meaning: every inserted token that no client deleted must be in the final text
  * exactly once, and every deleted token must be gone. Clients hold their updates back
  * and release them late, in random order, sometimes twice (the server then has to hold
- * updates whose predecessors have not arrived), go offline and come back through a new
+ * updates whose predecessors have not arrived), receive what the server relays late and in random
+ * order too (held updates are applied shuffled, a part at a time), go offline and come back through a new
  * handshake.
  *
  * To reproduce a failure: FC_SEED=<seed> FC_RUNS=<runs> npx vitest run test/convergence.test.ts
@@ -39,18 +42,39 @@ import type { CollabServer } from "../src/index";
 const SERVER_ORIGIN = Symbol("server");
 const CLIENTS = 3;
 const TOKEN = /\[c\d+:\d+\]/g;
+const PARAGRAPH_TOKEN = /\[p\d+:\d+\]/g;
 
 type Op =
   | { kind: "insert"; client: number; at: number }
   | { kind: "delete"; client: number; at: number }
   | { kind: "format"; client: number; at: number; span: number; bold: boolean }
   | { kind: "flush"; client: number; seed: number; partial: boolean }
+  | { kind: "deliver"; client: number; seed: number; partial: boolean }
+  | { kind: "paraInsert"; client: number; at: number }
+  | { kind: "paraDelete"; client: number; at: number }
   | { kind: "disconnect"; client: number }
   | { kind: "reconnect"; client: number }
   | { kind: "pause"; ms: number };
 
 const client = fc.integer({ min: 0, max: CLIENTS - 1 });
 const opArbitrary: fc.Arbitrary<Op> = fc.oneof(
+  {
+    weight: 4,
+    arbitrary: fc.record({
+      kind: fc.constant("deliver" as const),
+      client,
+      seed: fc.integer(),
+      partial: fc.boolean(),
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({ kind: fc.constant("paraInsert" as const), client, at: fc.nat() }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({ kind: fc.constant("paraDelete" as const), client, at: fc.nat() }),
+  },
   {
     weight: 6,
     arbitrary: fc.record({ kind: fc.constant("insert" as const), client, at: fc.nat() }),
@@ -98,11 +122,16 @@ function random(seed: number): () => number {
 class PropertyClient {
   readonly doc = new Y.Doc();
   readonly text = this.doc.getText("text");
+  /** The structure TipTap's Collaboration extension produces: paragraphs in the `default` fragment. */
+  readonly fragment = this.doc.getXmlFragment("default");
   private readonly awareness = new awarenessProtocol.Awareness(this.doc);
   private socket: Socket | null = null;
   private outbox: Uint8Array[] = [];
   private synced = false;
   private counter = 0;
+  /** Updates received from the server and not yet applied: the receiving side's delay and disorder. */
+  private held: Uint8Array[] = [];
+  private holding = true;
   /** Once set, updates go out as they are made, as in the browser editor. */
   private immediate = false;
 
@@ -134,6 +163,7 @@ class PropertyClient {
     );
     this.synced = false;
     this.outbox = [];
+    this.held = [];
     const socket = connect(`http://127.0.0.1:${this.server.port}`, {
       auth: { token, documentId: this.fixture.documentId },
       transports: ["websocket"],
@@ -147,9 +177,18 @@ class PropertyClient {
       socket.emit("sync", encoding.toUint8Array(encoder));
     });
     socket.on("sync", (data: Uint8Array) => {
+      const bytes = new Uint8Array(data);
+      // Only updates are held; the handshake messages must be answered at once.
+      if (
+        this.holding &&
+        decoding.readVarUint(decoding.createDecoder(bytes)) === syncProtocol.messageYjsUpdate
+      ) {
+        this.held.push(bytes);
+        return;
+      }
       const encoder = encoding.createEncoder();
       const type = syncProtocol.readSyncMessage(
-        decoding.createDecoder(new Uint8Array(data)),
+        decoding.createDecoder(bytes),
         encoder,
         this.doc,
         SERVER_ORIGIN,
@@ -198,6 +237,29 @@ class PropertyClient {
     }
   }
 
+  private apply(bytes: Uint8Array): void {
+    syncProtocol.readSyncMessage(
+      decoding.createDecoder(bytes),
+      encoding.createEncoder(),
+      this.doc,
+      SERVER_ORIGIN,
+    );
+  }
+
+  /** Applies received updates late and in random order; `partial` keeps a random part waiting. */
+  deliver(rng: () => number, partial: boolean): void {
+    const held = this.held;
+    this.held = [];
+    for (let i = held.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(rng() * (i + 1));
+      [held[i], held[j]] = [held[j]!, held[i]!];
+    }
+    for (const bytes of held) {
+      if (partial && rng() < 0.5) this.held.push(bytes);
+      else this.apply(bytes);
+    }
+  }
+
   /**
    * Everything held goes out, in the order it was made, and from now on every update is
    * sent at once. Yjs makes updates of its own while it applies what it receives (it removes
@@ -205,6 +267,8 @@ class PropertyClient {
    */
   release(): void {
     this.immediate = true;
+    this.holding = false;
+    this.deliver(() => 0, false);
     const held = this.outbox;
     this.outbox = [];
     for (const update of held) this.send(update);
@@ -235,6 +299,26 @@ class PropertyClient {
     const token = tokens[at % tokens.length]!;
     deleted.add(token.id);
     this.text.delete(token.start, token.end - token.start);
+  }
+
+  paragraphInsert(at: number, inserted: Set<string>): void {
+    this.counter += 1;
+    const id = `[p${this.index}:${this.counter}]`;
+    inserted.add(id);
+    this.doc.transact(() => {
+      const paragraph = new Y.XmlElement("paragraph");
+      paragraph.insert(0, [new Y.XmlText(id)]);
+      this.fragment.insert(at % (this.fragment.length + 1), [paragraph]);
+    });
+  }
+
+  paragraphDelete(at: number, deleted: Set<string>): void {
+    if (this.fragment.length === 0) return;
+    const index = at % this.fragment.length;
+    const id = this.fragment.get(index).toString().match(PARAGRAPH_TOKEN);
+    if (id?.length !== 1) throw new Error(`a paragraph without exactly one token: ${id}`);
+    deleted.add(id[0]);
+    this.fragment.delete(index, 1);
   }
 
   format(at: number, span: number, bold: boolean): void {
@@ -270,6 +354,8 @@ async function play(server: CollabServer, ops: Op[]): Promise<void> {
   );
   const inserted = new Set<string>();
   const deleted = new Set<string>();
+  const paragraphsInserted = new Set<string>();
+  const paragraphsDeleted = new Set<string>();
   try {
     await Promise.all(clients.map((c) => c.connect()));
     for (const op of ops) {
@@ -286,6 +372,15 @@ async function play(server: CollabServer, ops: Op[]): Promise<void> {
           break;
         case "flush":
           c.flush(random(op.seed), op.partial);
+          break;
+        case "deliver":
+          c.deliver(random(op.seed), op.partial);
+          break;
+        case "paraInsert":
+          c.paragraphInsert(op.at, paragraphsInserted);
+          break;
+        case "paraDelete":
+          c.paragraphDelete(op.at, paragraphsDeleted);
           break;
         case "disconnect":
           c.disconnect();
@@ -324,6 +419,17 @@ async function play(server: CollabServer, ops: Op[]): Promise<void> {
     expect(delta(stored), "the database formatting").toBe(delta(clients[0]!.doc));
     // Nothing typed is lost, nothing deleted comes back, nothing appears twice.
     expect((finalText.match(TOKEN) ?? []).sort(), "tokens in the final text").toEqual(expected);
+    // The same for the paragraphs of the fragment.
+    const fragmentText = clients[0]!.fragment.toString();
+    for (const c of clients) {
+      expect(c.fragment.toString(), `client ${c.index} paragraphs`).toBe(fragmentText);
+    }
+    expect(stored.getXmlFragment("default").toString(), "the database paragraphs").toBe(
+      fragmentText,
+    );
+    expect((fragmentText.match(PARAGRAPH_TOKEN) ?? []).sort(), "tokens in the paragraphs").toEqual(
+      [...paragraphsInserted].filter((id) => !paragraphsDeleted.has(id)).sort(),
+    );
     // Only tokens: no stray characters.
     expect(finalText.replace(TOKEN, ""), "text outside the tokens").toBe("");
   } finally {
