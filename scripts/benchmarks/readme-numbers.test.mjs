@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   END,
+  GOAL_TWO_MIN_EDITORS,
   START,
   TEXT_END,
   TEXT_START,
@@ -12,7 +13,13 @@ import {
   withBlocks,
 } from "./readme-numbers.mjs";
 
-const run = (label, editors, p95, status = "valid", { share = 0.2, extra = {} } = {}) => ({
+const run = (
+  label,
+  editors,
+  p95,
+  status = "valid",
+  { share = 0.2, extra = {}, max = 55.5, meter = false } = {},
+) => ({
   label,
   commit: "a".repeat(40),
   dirty: false,
@@ -37,9 +44,12 @@ const run = (label, editors, p95, status = "valid", { share = 0.2, extra = {} } 
       instances: 1,
     },
   },
-  latencyMs: { p50: 2.04, p95, p99: 20.456 },
+  latencyMs: { p50: 2.04, p95, p99: 20.456, max },
   server: { rssMiB: { windowMax: 311.7 }, cpuPercentOfOneCore: { windowMean: 48.2 } },
-  generator: [{ eventLoopDelayMs: { p99: 0.4 } }, { eventLoopDelayMs: { p99: 0.9 } }],
+  generator: [
+    { eventLoopDelayMs: { p99: 0.4, max: 3.2, ...(meter ? { maxAtMs: 1000 } : {}) } },
+    { eventLoopDelayMs: { p99: 0.9, max: 7.77, ...(meter ? { maxAtMs: 2000 } : {}) } },
+  ],
   integrity: { disconnects: 0, rejections: 0, refusedHandshakes: 0 },
   verdict: { status, invalid: [], failed: [] },
   ...extra,
@@ -145,8 +155,14 @@ test("the text says how many editors type, in each scenario", () => {
   assert.match(renderTable(base), /50 \(50 typing\)/);
 });
 
+/** The one-line verdict on the claim, which follows the table. */
+const verdictOf = (runs) =>
+  renderTable(runs)
+    .split("\n")
+    .find((line) => line.startsWith("**"));
+
 test("the claim does not hold with fewer than three runs, a slow run or a failed run", () => {
-  const verdict = (runs) => renderTable(runs).split("\n").at(-1);
+  const verdict = verdictOf;
   assert.match(verdict([run("50-run1", 50, 7), run("50-run2", 50, 8)]), /Not determined/);
   assert.match(verdict([run("a", 50, 7), run("b", 50, 8), run("c", 50, 101)]), /does not hold/);
   assert.match(
@@ -164,7 +180,7 @@ test("an invalid run is shown but does not count; all-write runs do not count to
     run("d", 50, 400, "invalid"),
     run("e", 50, 900, "valid", { share: 1 }),
   ];
-  const last = renderTable(runs).split("\n").at(-1);
+  const last = verdictOf(runs);
   assert.match(last, /holds as defined/);
   assert.match(renderTable(runs), /\| invalid \|/);
 });
@@ -188,4 +204,97 @@ test("an unclean run is named in the text", () => {
       : r,
   );
   assert.match(renderText(failing), /Not every counted run was clean/);
+});
+
+test("the table shows the slowest delivery of every run, and the text names the slowest of all", () => {
+  const runs = [
+    run("50-run1", 50, 7, "valid", { max: 12.34 }),
+    run("50-run2", 50, 8, "valid", { max: 99.96 }),
+    run("50-run3", 50, 9, "valid", { max: 40 }),
+    run("allwrite-50-run1", 50, 11, "valid", { share: 1, max: 141.49 }),
+    run("50-run9", 50, 9, "invalid", { max: 900 }),
+  ];
+  const table = renderTable(runs);
+  assert.match(table, /Slowest delivery, max \(ms\)/);
+  for (const shown of ["12.3", "100.0", "40.0", "141.5", "900.0"]) {
+    assert.ok(table.includes(`| ${shown} |`), shown);
+  }
+  const tail = renderText(runs)
+    .split("\n")
+    .find((line) => line.startsWith("**The tail.**"));
+  assert.ok(tail, "the text has a tail paragraph");
+  // The slowest of the counted runs; the invalid run is shown in the table but not counted.
+  assert.match(tail, /took 141\.5 ms \(`allwrite-50-run1`, all-write, 50 editors\)/);
+  assert.match(tail, /p99 was 20\.5 ms/);
+  assert.match(tail, /generator processes was 7\.8 ms/);
+  // A changed maximum in a results file makes an unchanged README fail.
+  const changed = runs.map((r) =>
+    r.label === "50-run2" ? { ...r, latencyMs: { ...r.latencyMs, max: 98 } } : r,
+  );
+  const good = withBlocks("# T\n\n## Performance\n\nSee the protocol.\n", runs);
+  assert.deepEqual(checkReadme(good, runs, DOCS), []);
+  assert.ok(checkReadme(good, changed, DOCS).length > 0);
+});
+
+test("the text derives how many runs preceded the all-write scenario instead of naming a number", () => {
+  const four = [
+    run("50-run1", 50, 7),
+    run("50-run2", 50, 8),
+    run("50-run3", 50, 9),
+    run("100-run1", 100, 9),
+    run("allwrite-50-run1", 50, 11, "valid", { share: 1 }),
+  ];
+  assert.match(
+    renderText(four),
+    /added after the 4 one-in-five runs, because in them only one editor in 5 wrote/,
+  );
+  assert.match(renderText(base), /added after the 4 one-in-five runs/);
+  const text = renderText([...four, run("200-run1", 200, 12)]);
+  assert.match(text, /added after the 5 one-in-five runs/);
+  assert.doesNotMatch(text, /nine|review/i);
+});
+
+test("it says plainly that every editor typing was not measured above the all-write sizes", () => {
+  const withLarger = [...base, run("200-run1", 200, 12)];
+  assert.match(
+    renderText(withLarger),
+    /Every editor typing was not measured above 50 editors: the one-in-five runs go up to 200 editors, of whom 40 typed\./,
+  );
+  // With nothing larger than the all-write runs, there is nothing to say.
+  assert.doesNotMatch(
+    renderText(base.filter((r) => r.parameters.editors <= 50)),
+    /was not measured above/,
+  );
+});
+
+test("it says which instrument measured the generator lag, run by run", () => {
+  const mixed = [
+    run("50-run1", 50, 7),
+    run("50-run2", 50, 8),
+    run("50-run3", 50, 9),
+    run("allwrite-50-run1", 50, 11, "valid", { share: 1, meter: true }),
+  ];
+  assert.match(
+    renderTable(mixed),
+    /mixes two instruments: Node's event-loop histogram for 3 runs and the timer meter of `apps\/collab\/bench\/lag\.ts` for 1 run \(/,
+  );
+  assert.match(renderTable(base), /comes from Node's event-loop histogram for all 7 runs/);
+  assert.match(
+    renderTable(base.map((r) => run(r.label, r.parameters.editors, 7, "valid", { meter: true }))),
+    /comes from the timer meter of `apps\/collab\/bench\/lag\.ts` for all 7 runs/,
+  );
+});
+
+test("goal 2's minimum size is a constant of its own, and the text is built from it", () => {
+  assert.equal(typeof GOAL_TWO_MIN_EDITORS, "number");
+  assert.match(
+    renderText(base),
+    new RegExp(`Goal 2 \\(${GOAL_TWO_MIN_EDITORS} or more editors on one document at once`),
+  );
+});
+
+test("the setup names what Redis does, not an adapter", () => {
+  const text = renderText(base);
+  assert.match(text, /Redis on \(relay, connection counters, membership channel\)/);
+  assert.doesNotMatch(text, /adapter/i);
 });

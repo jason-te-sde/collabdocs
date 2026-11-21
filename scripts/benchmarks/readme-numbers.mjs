@@ -8,7 +8,8 @@
 // files and compares exactly (after normalising Markdown table padding):
 //   performance-text   the claim, the setup, the scenarios, the integrity summary, the
 //                      goal-2 verdict and the medians by size
-//   performance-table  one row per run, and the verdict on the claim
+//   performance-table  one row per run, the verdict on the claim, and which instrument
+//                      measured the generator lag in which runs
 // Every number in those blocks is the value of a field of the results files (or one of the
 // claim constants below, which must also appear in the protocol, docs/benchmarks.md),
 // printed at a fixed precision. The rest of the section is hand-written and must not
@@ -27,6 +28,8 @@ export const END = "<!-- performance-table:end -->";
 const DEFAULT_RESULTS = "apps/collab/bench/results";
 const DEFAULT_DOCS = "docs/benchmarks.md";
 export const CLAIM = { editors: 50, p95Ms: 100, minRuns: 3 };
+/** Goal 2: how many editors at once on one document. A threshold of its own: it is not the latency claim's size. */
+export const GOAL_TWO_MIN_EDITORS = 50;
 
 const SPELLED =
   /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|fifty|hundred|thousand|first|second|third|fourth|fifth|half|twice|thrice|dozen)\b/i;
@@ -75,15 +78,35 @@ function claimSentence(results) {
 export function renderTable(results) {
   const rows = results.map((r) => {
     const lag = Math.max(0, ...r.generator.map((g) => g.eventLoopDelayMs.p99));
-    return `| \`${r.file ?? `${r.label}.json`}\` | ${scenarioOf(r)} | ${r.parameters.editors} (${r.parameters.writers} typing) | ${fixed(r.latencyMs.p50, 1)} | ${fixed(r.latencyMs.p95, 1)} | ${fixed(r.latencyMs.p99, 1)} | ${fixed(r.server.rssMiB.windowMax, 0)} | ${fixed(r.server.cpuPercentOfOneCore.windowMean, 0)} | ${fixed(lag, 1)} | ${r.verdict.status} |`;
+    return `| \`${r.file ?? `${r.label}.json`}\` | ${scenarioOf(r)} | ${r.parameters.editors} (${r.parameters.writers} typing) | ${fixed(r.latencyMs.p50, 1)} | ${fixed(r.latencyMs.p95, 1)} | ${fixed(r.latencyMs.p99, 1)} | ${fixed(r.latencyMs.max, 1)} | ${fixed(r.server.rssMiB.windowMax, 0)} | ${fixed(r.server.cpuPercentOfOneCore.windowMean, 0)} | ${fixed(lag, 1)} | ${r.verdict.status} |`;
   });
   return [
-    "| Results file | Scenario | Editors | p50 (ms) | p95 (ms) | p99 (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms, includes about a millisecond of timer slop) | Status |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Results file | Scenario | Editors | p50 (ms) | p95 (ms) | p99 (ms) | Slowest delivery, max (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms, includes about a millisecond of timer slop) | Status |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...rows,
     "",
     claimSentence(results),
+    "",
+    instrumentsLine(results),
   ].join("\n");
+}
+
+/** Whether a run's generator lag came from the timer meter (it records when the worst delay was) or from Node's histogram. */
+const usedMeter = (r) => r.generator.every((g) => g.eventLoopDelayMs.maxAtMs !== undefined);
+
+const plural = (n) => `${n} run${n === 1 ? "" : "s"}`;
+
+/** Says which instrument measured the generator lag column, per run: the runs differ. */
+function instrumentsLine(results) {
+  const meter = results.filter(usedMeter).length;
+  const histogram = results.length - meter;
+  const meterName = "the timer meter of `apps/collab/bench/lag.ts`";
+  const histogramName = "Node's event-loop histogram";
+  const see = "see addendum 3 of [docs/benchmarks.md](docs/benchmarks.md)";
+  if (meter > 0 && histogram > 0) {
+    return `The generator lag column mixes two instruments: ${histogramName} for ${plural(histogram)} and ${meterName} for ${plural(meter)} (${see}).`;
+  }
+  return `The generator lag column comes from ${meter > 0 ? meterName : histogramName} for all ${plural(results.length)} (${see}).`;
 }
 
 const sizes = (results, scenario) =>
@@ -126,16 +149,25 @@ function goalTwoLine(results) {
   }
   const all = sizes(results, "all-write");
   const supported = all
-    .filter((n) => n >= CLAIM.editors)
+    .filter((n) => n >= GOAL_TWO_MIN_EDITORS)
     .filter((n) => {
       const runs = counted(results, "all-write", n);
       return runs.length >= CLAIM.minRuns && runs.every((r) => r.verdict.status === "valid");
     });
   const head =
     supported.length > 0
-      ? `**Goal 2 (${CLAIM.editors} or more editors on one document at once, with live cursors and presence), as measured:** supported with every editor typing, up to ${Math.max(...supported)} editors.`
-      : `**Goal 2 (${CLAIM.editors} or more editors on one document at once, with live cursors and presence), as measured:** not supported with every editor typing by these runs.`;
-  return `${head} By run: ${parts.join("; ")}.`;
+      ? `**Goal 2 (${GOAL_TWO_MIN_EDITORS} or more editors on one document at once, with live cursors and presence), as measured:** supported with every editor typing, up to ${Math.max(...supported)} editors.`
+      : `**Goal 2 (${GOAL_TWO_MIN_EDITORS} or more editors on one document at once, with live cursors and presence), as measured:** not supported with every editor typing by these runs.`;
+  const mostOne = Math.max(0, ...sizes(results, "one-in-five"));
+  const mostAll = Math.max(0, ...all);
+  const gap =
+    mostAll > 0 && mostOne > mostAll
+      ? ` Every editor typing was not measured above ${mostAll} editors: the one-in-five runs go up to ${mostOne} editors, of whom ${
+          results.find((r) => scenarioOf(r) === "one-in-five" && r.parameters.editors === mostOne)
+            .parameters.writers
+        } typed.`
+      : "";
+  return `${head} By run: ${parts.join("; ")}.${gap}`;
 }
 
 function mediansLine(results) {
@@ -151,7 +183,16 @@ function mediansLine(results) {
   return `Median over the counted runs of each size, p95 latency and mean server CPU as a percentage of one core: ${out.join("; ")}.`;
 }
 
-/** The generated prose: claim, setup, scenarios, integrity, goal 2, medians. */
+/** The slowest single delivery of any counted run, with that run's p99 and its generators' worst delay. */
+function tailLine(results) {
+  const runs = results.filter((r) => r.verdict.status !== "invalid");
+  if (runs.length === 0) return null;
+  const worst = runs.reduce((a, b) => (b.latencyMs.max > a.latencyMs.max ? b : a));
+  const stall = Math.max(0, ...worst.generator.map((g) => g.eventLoopDelayMs.max));
+  return `**The tail.** The slowest single delivery in a counted run took ${fixed(worst.latencyMs.max, 1)} ms (\`${worst.file ?? worst.label}\`, ${scenarioOf(worst)}, ${worst.parameters.editors} editors); that run's p99 was ${fixed(worst.latencyMs.p99, 1)} ms and the worst event-loop delay of its generator processes was ${fixed(stall, 1)} ms. The table shows the maximum of every run. The claim is judged on p95 and goal 2 on clean runs, not on the maximum.`;
+}
+
+/** The generated prose: claim, setup, scenarios, integrity, goal 2, medians, tail. */
 export function renderText(results) {
   const first = results[0];
   const p = first.parameters;
@@ -195,7 +236,7 @@ export function renderText(results) {
   const lines = [
     `**The claim, as defined.** "Sync latency under ${CLAIM.p95Ms} ms" means: with ${CLAIM.editors} editors on one document on local loopback, the 95th percentile of the time from a client applying and sending its own edit to another client having received and applied it, over every (edit, receiving editor) pair of a run, is below ${CLAIM.p95Ms} ms in each of at least ${CLAIM.minRuns} runs.`,
     "",
-    `**Setup.** One ${first.machine.cpu} machine with ${first.machine.cores} cores and ${first.machine.ramGiB} GB of RAM; the clients and the server on the loopback interface; Node ${first.nodeVersion}, PostgreSQL ${first.services.postgres.split(" ")[0]} and Redis ${first.services.redis}, all local. The server is the real collab server in ${p.server.nodeEnv} mode: ${p.server.instances} instance, the Redis adapter ${on(p.server.redisAdapter)}, PostgreSQL persistence ${on(p.server.postgresPersistence)} (update log compacted into snapshots), and ${p.server.limits === "defaults" ? "default" : p.server.limits} limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. A typing editor makes ${p.editsPerSecondPerWriter} edits per second on average, one character per edit, and moves its cursor with every character; an editor that does not type moves its cursor about every ${p.readerCursorIntervalMs / 1000} seconds. Each run has ${p.warmupSeconds} seconds of warm-up, a window of ${p.durationSeconds} seconds that is measured, and ${p.drainSeconds} seconds for what is still in flight to arrive. The editors are headless (\`yjs\` and \`socket.io-client\`, speaking the real sync and awareness protocol).`,
+    `**Setup.** One ${first.machine.cpu} machine with ${first.machine.cores} cores and ${first.machine.ramGiB} GB of RAM; the clients and the server on the loopback interface; Node ${first.nodeVersion}, PostgreSQL ${first.services.postgres.split(" ")[0]} and Redis ${first.services.redis}, all local. The server is the real collab server in ${p.server.nodeEnv} mode: ${p.server.instances} instance, Redis ${on(p.server.redisAdapter)}${p.server.redisAdapter ? " (relay, connection counters, membership channel)" : ""}, PostgreSQL persistence ${on(p.server.postgresPersistence)} (update log compacted into snapshots), and ${p.server.limits === "defaults" ? "default" : p.server.limits} limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. A typing editor makes ${p.editsPerSecondPerWriter} edits per second on average, one character per edit, and moves its cursor with every character; an editor that does not type moves its cursor about every ${p.readerCursorIntervalMs / 1000} seconds. Each run has ${p.warmupSeconds} seconds of warm-up, a window of ${p.durationSeconds} seconds that is measured, and ${p.drainSeconds} seconds for what is still in flight to arrive. The editors are headless (\`yjs\` and \`socket.io-client\`, speaking the real sync and awareness protocol).`,
     "",
     `**Two scenarios.** In the _one-in-five_ scenario one editor in ${k} types and the others only read: ${sizes(
       results,
@@ -212,9 +253,9 @@ export function renderText(results) {
             "all-write",
           )
             .map((n) => `${n} editors, ${n} of them typing`)
-            .join(
-              "; ",
-            )}; generator processes: ${processes("all-write")}. It was added after the first nine runs, prompted by the review of them, which found that only one editor in ${k} wrote; see [docs/benchmarks.md](docs/benchmarks.md).`
+            .join("; ")}; generator processes: ${processes("all-write")}. It was added after the ${
+            results.filter((r) => scenarioOf(r) === "one-in-five").length
+          } one-in-five runs, because in them only one editor in ${k} wrote; see [docs/benchmarks.md](docs/benchmarks.md).`
         : ""
     }`,
     "",
@@ -223,6 +264,7 @@ export function renderText(results) {
     goalTwoLine(results),
     "",
     mediansLine(results),
+    ...(tailLine(results) ? ["", tailLine(results)] : []),
     ...(notes.length ? ["", ...notes] : []),
   ];
   return lines.join("\n");

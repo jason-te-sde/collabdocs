@@ -39,7 +39,7 @@ The screenshot is Ada's browser, one of three Playwright browsers in the same do
 
 The project is built to deliver four things. Goals 1 and 2 are measured by the load test, and the numbers, with how many editors typed in each run and what they do and do not show, are in [Performance](#performance). Goals 3 and 4 have tests that run in CI.
 
-1. Yjs CRDT sync over Socket.IO with a latency under 100 ms. Defined as: with 50 editors on loopback, the p95 of the time from one client's write to every other client applying it.
+1. Yjs CRDT sync over Socket.IO with a latency under 100 ms. Defined as: with 50 editors on loopback, the p95, over every (edit, receiving editor) pair, of the time from one client's write to each other client applying it.
 2. 50 or more people editing one document at once, with live cursors and presence (the Yjs awareness protocol).
 3. Every route and every WebSocket event protected, with OAuth and password sign-in and role-based permissions. Both halves are done and tested: the REST routes and the socket server.
 4. Lighthouse performance and accessibility of 92 or more, with Tailwind and Radix UI, enforced in CI. Done: see [Lighthouse](#lighthouse).
@@ -74,7 +74,7 @@ flowchart LR
   Mem <-- "relay frames (HMAC)" --> RD
 ```
 
-The browser gets a page and a collaboration token from the web app, then opens one Socket.IO connection per document to the collab server. The server checks the token and the membership in the database when the socket connects, and the role again on every message. An accepted update is applied to the server's copy of the document, appended to the update log in PostgreSQL, and only then relayed to the other sockets and, through Redis, to the other collab instances. Why each piece is the way it is: [docs/design](docs/design) (0001 monorepo and Socket.IO, 0002 roles and tokens, 0003 the collab server, 0004 the editor client, 0005 y-protocols over Socket.IO, 0006 the update log and snapshots, 0007 the Redis relay and its trust model).
+The browser gets a page and a collaboration token from the web app, then opens one Socket.IO connection per document to the collab server. The server checks the token and the membership in the database when the socket connects, and the role again on every message. An accepted update is applied to the server's copy of the document and sent at once to the other sockets on that instance; it is appended to the update log in PostgreSQL right after, and only once that commit has succeeded is it relayed, through Redis, to the other collab instances. Why each piece is the way it is: [docs/design](docs/design) (0001 monorepo and Socket.IO, 0002 roles and tokens, 0003 the collab server, 0004 the editor client, 0005 y-protocols over Socket.IO, 0006 the update log and snapshots, 0007 the Redis relay and its trust model).
 
 ## Lighthouse
 
@@ -109,43 +109,47 @@ Measured by the sync-latency load test in `apps/collab/bench`, under the protoco
 
 **The claim, as defined.** "Sync latency under 100 ms" means: with 50 editors on one document on local loopback, the 95th percentile of the time from a client applying and sending its own edit to another client having received and applied it, over every (edit, receiving editor) pair of a run, is below 100 ms in each of at least 3 runs.
 
-**Setup.** One Apple M2 machine with 8 cores and 16 GB of RAM; the clients and the server on the loopback interface; Node v25.6.1, PostgreSQL 17.10 and Redis 8.10.3, all local. The server is the real collab server in production mode: 1 instance, the Redis adapter on, PostgreSQL persistence on (update log compacted into snapshots), and default limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. A typing editor makes 3 edits per second on average, one character per edit, and moves its cursor with every character; an editor that does not type moves its cursor about every 5 seconds. Each run has 10 seconds of warm-up, a window of 60 seconds that is measured, and 5 seconds for what is still in flight to arrive. The editors are headless (`yjs` and `socket.io-client`, speaking the real sync and awareness protocol).
+**Setup.** One Apple M2 machine with 8 cores and 16 GB of RAM; the clients and the server on the loopback interface; Node v25.6.1, PostgreSQL 17.10 and Redis 8.10.3, all local. The server is the real collab server in production mode: 1 instance, Redis on (relay, connection counters, membership channel), PostgreSQL persistence on (update log compacted into snapshots), and default limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. A typing editor makes 3 edits per second on average, one character per edit, and moves its cursor with every character; an editor that does not type moves its cursor about every 5 seconds. Each run has 10 seconds of warm-up, a window of 60 seconds that is measured, and 5 seconds for what is still in flight to arrive. The editors are headless (`yjs` and `socket.io-client`, speaking the real sync and awareness protocol).
 
-**Two scenarios.** In the _one-in-five_ scenario one editor in 5 types and the others only read: 50 editors, 10 of them typing; 100 editors, 20 of them typing; 200 editors, 40 of them typing; generator processes: 50 editors on 2, 100 editors on 3, 200 editors on 5. In the _all-write_ scenario every editor types, at the same rate and with the same cursor behaviour: 50 editors, 50 of them typing; 100 editors, 100 of them typing; generator processes: 50 editors on 2, 100 editors on 3. It was added after the first nine runs, prompted by the review of them, which found that only one editor in 5 wrote; see [docs/benchmarks.md](docs/benchmarks.md).
+**Two scenarios.** In the _one-in-five_ scenario one editor in 5 types and the others only read: 50 editors, 10 of them typing; 100 editors, 20 of them typing; 200 editors, 40 of them typing; generator processes: 50 editors on 2, 100 editors on 3, 200 editors on 5. In the _all-write_ scenario every editor types, at the same rate and with the same cursor behaviour: 50 editors, 50 of them typing; 100 editors, 100 of them typing; generator processes: 50 editors on 2, 100 editors on 3. It was added after the 9 one-in-five runs, because in them only one editor in 5 wrote; see [docs/benchmarks.md](docs/benchmarks.md).
 
 In every one of the 15 counted runs nobody was disconnected, refused or sent a `rejected` notice, the server logged no warning, every delivery arrived exactly once, and every editor and the database ended with the same document; the default limits did not throttle these loads.
 
-**Goal 2 (50 or more editors on one document at once, with live cursors and presence), as measured:** supported with every editor typing, up to 100 editors. By run: 50 editors with 50 typing (all-write): 3 of 3 counted runs clean; 100 editors with 100 typing (all-write): 3 of 3 counted runs clean; 50 editors with 10 typing (one-in-five): 3 of 3 counted runs clean; 100 editors with 20 typing (one-in-five): 3 of 3 counted runs clean; 200 editors with 40 typing (one-in-five): 3 of 3 counted runs clean.
+**Goal 2 (50 or more editors on one document at once, with live cursors and presence), as measured:** supported with every editor typing, up to 100 editors. By run: 50 editors with 50 typing (all-write): 3 of 3 counted runs clean; 100 editors with 100 typing (all-write): 3 of 3 counted runs clean; 50 editors with 10 typing (one-in-five): 3 of 3 counted runs clean; 100 editors with 20 typing (one-in-five): 3 of 3 counted runs clean; 200 editors with 40 typing (one-in-five): 3 of 3 counted runs clean. Every editor typing was not measured above 100 editors: the one-in-five runs go up to 200 editors, of whom 40 typed.
 
 Median over the counted runs of each size, p95 latency and mean server CPU as a percentage of one core: one-in-five: 50 editors 5.9 ms and 12%, 100 editors 6.2 ms and 23%, 200 editors 10.3 ms and 49%; all-write: 50 editors 3.6 ms and 27%, 100 editors 8.0 ms and 53%.
+
+**The tail.** The slowest single delivery in a counted run took 141.5 ms (`allwrite-100-run3.json`, all-write, 100 editors); that run's p99 was 19.3 ms and the worst event-loop delay of its generator processes was 43.2 ms. The table shows the maximum of every run. The claim is judged on p95 and goal 2 on clean runs, not on the maximum.
 <!-- performance-text:end -->
 
 <!-- performance-table:start -->
 
-| Results file             | Scenario    | Editors          | p50 (ms) | p95 (ms) | p99 (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms, includes about a millisecond of timer slop) | Status |
-| ------------------------ | ----------- | ---------------- | -------- | -------- | -------- | ------------------------- | ------------------------------ | --------------------------------------------------------------------------------- | ------ |
-| `50-run1.json`           | one-in-five | 50 (10 typing)   | 1.9      | 5.2      | 7.5      | 147                       | 10                             | 2.0                                                                               | valid  |
-| `50-run2.json`           | one-in-five | 50 (10 typing)   | 2.7      | 6.1      | 8.2      | 146                       | 15                             | 2.0                                                                               | valid  |
-| `50-run3.json`           | one-in-five | 50 (10 typing)   | 2.3      | 5.9      | 7.8      | 193                       | 12                             | 1.9                                                                               | valid  |
-| `100-run1.json`          | one-in-five | 100 (20 typing)  | 2.3      | 6.2      | 9.7      | 202                       | 23                             | 2.0                                                                               | valid  |
-| `100-run2.json`          | one-in-five | 100 (20 typing)  | 2.4      | 6.3      | 9.0      | 203                       | 24                             | 2.0                                                                               | valid  |
-| `100-run3.json`          | one-in-five | 100 (20 typing)  | 1.9      | 5.0      | 7.6      | 201                       | 18                             | 1.9                                                                               | valid  |
-| `200-run1.json`          | one-in-five | 200 (40 typing)  | 3.3      | 10.3     | 17.5     | 219                       | 48                             | 1.9                                                                               | valid  |
-| `200-run2.json`          | one-in-five | 200 (40 typing)  | 3.4      | 10.2     | 15.9     | 225                       | 49                             | 1.9                                                                               | valid  |
-| `200-run3.json`          | one-in-five | 200 (40 typing)  | 3.9      | 11.4     | 17.8     | 222                       | 52                             | 1.9                                                                               | valid  |
-| `allwrite-50-run1.json`  | all-write   | 50 (50 typing)   | 1.6      | 3.6      | 5.3      | 208                       | 26                             | 1.9                                                                               | valid  |
-| `allwrite-50-run2.json`  | all-write   | 50 (50 typing)   | 1.6      | 3.6      | 5.3      | 211                       | 27                             | 1.9                                                                               | valid  |
-| `allwrite-50-run3.json`  | all-write   | 50 (50 typing)   | 1.6      | 3.6      | 5.4      | 215                       | 27                             | 1.9                                                                               | valid  |
-| `allwrite-100-run1.json` | all-write   | 100 (100 typing) | 2.4      | 8.0      | 16.2     | 263                       | 53                             | 3.4                                                                               | valid  |
-| `allwrite-100-run2.json` | all-write   | 100 (100 typing) | 2.4      | 7.9      | 15.9     | 234                       | 52                             | 3.3                                                                               | valid  |
-| `allwrite-100-run3.json` | all-write   | 100 (100 typing) | 2.4      | 8.1      | 19.3     | 295                       | 53                             | 3.5                                                                               | valid  |
+| Results file             | Scenario    | Editors          | p50 (ms) | p95 (ms) | p99 (ms) | Slowest delivery, max (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms, includes about a millisecond of timer slop) | Status |
+| ------------------------ | ----------- | ---------------- | -------- | -------- | -------- | -------------------------- | ------------------------- | ------------------------------ | --------------------------------------------------------------------------------- | ------ |
+| `50-run1.json`           | one-in-five | 50 (10 typing)   | 1.9      | 5.2      | 7.5      | 17.9                       | 147                       | 10                             | 2.0                                                                               | valid  |
+| `50-run2.json`           | one-in-five | 50 (10 typing)   | 2.7      | 6.1      | 8.2      | 21.9                       | 146                       | 15                             | 2.0                                                                               | valid  |
+| `50-run3.json`           | one-in-five | 50 (10 typing)   | 2.3      | 5.9      | 7.8      | 76.1                       | 193                       | 12                             | 1.9                                                                               | valid  |
+| `100-run1.json`          | one-in-five | 100 (20 typing)  | 2.3      | 6.2      | 9.7      | 22.5                       | 202                       | 23                             | 2.0                                                                               | valid  |
+| `100-run2.json`          | one-in-five | 100 (20 typing)  | 2.4      | 6.3      | 9.0      | 28.2                       | 203                       | 24                             | 2.0                                                                               | valid  |
+| `100-run3.json`          | one-in-five | 100 (20 typing)  | 1.9      | 5.0      | 7.6      | 48.5                       | 201                       | 18                             | 1.9                                                                               | valid  |
+| `200-run1.json`          | one-in-five | 200 (40 typing)  | 3.3      | 10.3     | 17.5     | 89.6                       | 219                       | 48                             | 1.9                                                                               | valid  |
+| `200-run2.json`          | one-in-five | 200 (40 typing)  | 3.4      | 10.2     | 15.9     | 67.8                       | 225                       | 49                             | 1.9                                                                               | valid  |
+| `200-run3.json`          | one-in-five | 200 (40 typing)  | 3.9      | 11.4     | 17.8     | 52.6                       | 222                       | 52                             | 1.9                                                                               | valid  |
+| `allwrite-50-run1.json`  | all-write   | 50 (50 typing)   | 1.6      | 3.6      | 5.3      | 12.8                       | 208                       | 26                             | 1.9                                                                               | valid  |
+| `allwrite-50-run2.json`  | all-write   | 50 (50 typing)   | 1.6      | 3.6      | 5.3      | 79.0                       | 211                       | 27                             | 1.9                                                                               | valid  |
+| `allwrite-50-run3.json`  | all-write   | 50 (50 typing)   | 1.6      | 3.6      | 5.4      | 88.7                       | 215                       | 27                             | 1.9                                                                               | valid  |
+| `allwrite-100-run1.json` | all-write   | 100 (100 typing) | 2.4      | 8.0      | 16.2     | 61.9                       | 263                       | 53                             | 3.4                                                                               | valid  |
+| `allwrite-100-run2.json` | all-write   | 100 (100 typing) | 2.4      | 7.9      | 15.9     | 69.2                       | 234                       | 52                             | 3.3                                                                               | valid  |
+| `allwrite-100-run3.json` | all-write   | 100 (100 typing) | 2.4      | 8.1      | 19.3     | 141.5                      | 295                       | 53                             | 3.5                                                                               | valid  |
 
 **The claim holds as defined:** the p95 of every one of the 3 valid runs at 50 editors is below 100 ms (highest 6.1 ms).
+
+The generator lag column mixes two instruments: Node's event-loop histogram for 9 runs and the timer meter of `apps/collab/bench/lag.ts` for 6 runs (see addendum 3 of [docs/benchmarks.md](docs/benchmarks.md)).
 <!-- performance-table:end -->
 
-**What this does and does not show.** The latency is to the receiving `Y.Doc`, so it does not include rendering in a browser. An editor count here is the number of connected editors; the text above says how many of them typed in each scenario, and the sentence about editing at once, with cursors and presence, rests on the scenario in which all of them did. The load test edits a `Y.Text`; the server relays Yjs updates without looking at what they contain, and the property test also covers the paragraph structure the editor produces. The generator lag column is the lag of a timer in the load generator, which cannot be below about a millisecond even when nothing is wrong; it is there to show that the generator was not the bottleneck, not as a measurement of that much lag.
+**What this does and does not show.** The latency is to the receiving `Y.Doc`, so it does not include rendering in a browser. An editor count here is the number of connected editors; the text above says how many of them typed in each scenario, and the sentence about editing at once, with cursors and presence, rests on the scenario in which all of them did. The load test edits a `Y.Text`; the server relays Yjs updates without looking at what they contain, and the property test also covers the paragraph structure the editor produces. The generator lag column is the delay of the load generator's event loop (the note under the table says which instrument measured it in which runs); it cannot be below about a millisecond even when nothing is wrong, and it is there to show that the generator was not the bottleneck, not as a measurement of that much lag.
 
-**Not measured.** Browsers (rendering, TipTap, ProseMirror); any real network (WAN, TLS, a proxy or load balancer, Wi-Fi); several server instances, and several documents at a time; a large or old document (the log is short and the snapshot small); read-only viewers; the server's event-loop lag and the CPU and memory of Redis and PostgreSQL (only the server process was sampled); editors that reconnect during a run; long soak runs; sizes above the largest in the table.
+**Not measured.** Browsers (rendering, TipTap, ProseMirror); any real network (WAN, TLS, a proxy or load balancer, Wi-Fi); several server instances, and several documents at a time; a large or old document (the log is short and the snapshot small); read-only viewers; the server's event-loop lag and the CPU and memory of Redis and PostgreSQL (only the server process was sampled); editors that reconnect during a run; long soak runs; editor counts above the largest in the table, and every editor typing above the largest all-write size (the text above gives the sizes).
 
 To measure again, see [Reproducing](docs/benchmarks.md#reproducing).
 
@@ -190,7 +194,7 @@ npm run db:deploy                     # apply the migrations
 npm run dev -w apps/web               # http://localhost:3000
 ```
 
-The editor also needs the collab server (next section). The page tells the browser where it is from `COLLAB_URL` (default `http://localhost:4000`), which is read when the page is rendered, so one build serves any deployment.
+The editor also needs the collab server (next section). The page tells the browser where it is from `COLLAB_URL` (default `http://localhost:4000`), which is read when the page is rendered, so one build serves any deployment. The collab server must be started with `COLLAB_CORS_ORIGIN` set to the web app's origin (`http://localhost:3000` here): a browser on any other origin is refused.
 
 Create a user and try the API:
 
@@ -207,6 +211,7 @@ Sign in at `http://localhost:3000/api/auth/signin`, then call the routes below w
 export DATABASE_URL=postgresql://collabdocs:collabdocs@localhost:5432/collabdocs
 export REDIS_URL=redis://localhost:6379          # optional: without it the server runs alone
 export COLLAB_TOKEN_SECRET=...                   # the same value the web app uses
+export COLLAB_CORS_ORIGIN=http://localhost:3000  # the web app's origin; without it only the collab server's own origin may connect
 export REDIS_MESSAGE_SECRET=...                  # required with REDIS_URL; the same value the web app uses
 npm run start -w apps/collab                     # listens on :4000, GET /healthz
 ```
@@ -217,40 +222,41 @@ The web app asks for a token (`POST /api/documents/:id/collab-token`) and the cl
 
 Everything the collab server limits is an environment variable; the defaults are in the table, and [docs/operations.md](docs/operations.md) says what happens past each one and when to change it. Every limit has a test. The web app's account limits (sign-in, registration, invitations) are in [SECURITY.md](SECURITY.md).
 
-| Variable                                | Default   | Meaning                                                                                                        |
-| --------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
-| `COLLAB_PORT`, `COLLAB_HOST`            | 4000, all | where it listens                                                                                               |
-| `COLLAB_CORS_ORIGIN`                    | none      | allowed browser origins, comma separated                                                                       |
-| `COLLAB_MAX_UPDATE_BYTES`               | 1048576   | largest sync message                                                                                           |
-| `COLLAB_MAX_AWARENESS_BYTES`            | 8192      | largest awareness message                                                                                      |
-| `COLLAB_MAX_MESSAGES_PER_SECOND`        | 100       | per socket; over it the socket is disconnected                                                                 |
-| `COLLAB_MESSAGE_BURST`                  | 200       | messages a socket may send at once                                                                             |
-| `COLLAB_MAX_BYTES_PER_SECOND`           | 262144    | per socket; over it the socket is disconnected                                                                 |
-| `COLLAB_BYTE_BURST`                     | 2097152   | bytes a socket may send at once (at least the update maximum)                                                  |
-| `COLLAB_MAX_DOCUMENT_BYTES`             | 16777216  | snapshot plus log; past it writes are refused                                                                  |
-| `COLLAB_MAX_PENDING_BYTES`              | 8388608   | accepted but not yet stored, per document; past it, disconnect                                                 |
-| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT`   | 250       | across instances                                                                                               |
-| `COLLAB_MAX_CONNECTIONS_PER_USER`       | 8         | sockets one user may hold on one document, across instances                                                    |
-| `COLLAB_HANDSHAKE_BURST_PER_USER`       | 20        | handshakes a user may start at once, per instance                                                              |
-| `COLLAB_HANDSHAKES_PER_SECOND_PER_USER` | 1         | then this many per second; over it, `rate_limited`                                                             |
-| `COLLAB_HANDSHAKE_BURST_PER_IP`         | 2000      | anti-flood ceiling per client address (IPv6: per /64), per instance; counts only handshakes with a valid token |
-| `COLLAB_HANDSHAKES_PER_SECOND_PER_IP`   | 100       |                                                                                                                |
-| `COLLAB_RATE_LIMITER_MAX_KEYS`          | 100000    | users or addresses each in-memory limiter remembers; past it the least recently used are dropped and counted   |
-| `COLLAB_MAX_BYTES_PER_SECOND_PER_USER`  | 524288    | shared by all of a user's sockets, per instance                                                                |
-| `COLLAB_BYTE_BURST_PER_USER`            | 4194304   | at least the update maximum                                                                                    |
-| `COLLAB_MAX_IN_FLIGHT_BYTES`            | 67108864  | received but not yet processed, all sockets of the instance                                                    |
-| `COLLAB_MAX_PENDING_STRUCT_BYTES`       | 1048576   | updates waiting for a missing dependency, per document                                                         |
-| `COLLAB_TRUSTED_PROXY_HOPS`             | 0         | proxies in front that append to `X-Forwarded-For` (0 ignores it); **set it behind a proxy**, see operations.md |
-| `COLLAB_INSTANCE_ID`                    | random    | names this instance in logs and relayed messages; set it when running several                                  |
-| `REDIS_MESSAGE_SECRET`                  | none      | required with `REDIS_URL`; signs the Redis messages                                                            |
-| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`       | 5000      | start fails if Redis is not reachable within this                                                              |
-| `COLLAB_CONNECTION_TTL_MS`              | 45000     | a dead instance's connection slots expire after this                                                           |
-| `COLLAB_COMPACT_EVERY_UPDATES`          | 200       | compact the log into a snapshot after this many updates                                                        |
-| `COLLAB_COMPACT_AFTER_MS`               | 30000     | or this long after the first uncompacted update                                                                |
-| `COLLAB_UNLOAD_GRACE_MS`                | 30000     | keep a document in memory this long after its last client left                                                 |
-| `COLLAB_RECONCILE_INTERVAL_MS`          | 5000      | how often an instance reads the log for updates it did not see                                                 |
-| `COLLAB_MEMBERSHIP_RECHECK_MS`          | 60000     | how often sockets are checked against the `Membership` table                                                   |
-| `COLLAB_ROLE_CACHE_MS`                  | 1000      | a socket's role is read again before a write if older than this                                                |
+| Variable                                | Default   | Meaning                                                                                                         |
+| --------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------- |
+| `COLLAB_PORT`, `COLLAB_HOST`            | 4000, all | where it listens                                                                                                |
+| `COLLAB_CORS_ORIGIN`                    | none      | browser origins allowed to connect, comma separated (WebSocket and polling); none: only the server's own origin |
+| `COLLAB_MAX_UPDATE_BYTES`               | 1048576   | largest sync message                                                                                            |
+| `COLLAB_MAX_AWARENESS_BYTES`            | 8192      | largest awareness message                                                                                       |
+| `COLLAB_MAX_MESSAGES_PER_SECOND`        | 100       | per socket; over it the socket is disconnected                                                                  |
+| `COLLAB_MESSAGE_BURST`                  | 200       | messages a socket may send at once                                                                              |
+| `COLLAB_MAX_BYTES_PER_SECOND`           | 262144    | per socket; over it the socket is disconnected                                                                  |
+| `COLLAB_BYTE_BURST`                     | 2097152   | bytes a socket may send at once (at least the update maximum); the replies it asks for count too                |
+| `COLLAB_MAX_OUTBOUND_BYTES`             | 4194304   | queued for one socket and not yet taken by its client; over it the socket is disconnected                       |
+| `COLLAB_MAX_DOCUMENT_BYTES`             | 16777216  | snapshot plus log; past it writes are refused                                                                   |
+| `COLLAB_MAX_PENDING_BYTES`              | 8388608   | accepted but not yet stored, per document; past it, disconnect                                                  |
+| `COLLAB_MAX_CONNECTIONS_PER_DOCUMENT`   | 250       | across instances                                                                                                |
+| `COLLAB_MAX_CONNECTIONS_PER_USER`       | 8         | sockets one user may hold on one document, across instances                                                     |
+| `COLLAB_HANDSHAKE_BURST_PER_USER`       | 20        | handshakes a user may start at once, per instance                                                               |
+| `COLLAB_HANDSHAKES_PER_SECOND_PER_USER` | 1         | then this many per second; over it, `rate_limited`                                                              |
+| `COLLAB_HANDSHAKE_BURST_PER_IP`         | 2000      | anti-flood ceiling per client address (IPv6: per /64), per instance; counts only handshakes with a valid token  |
+| `COLLAB_HANDSHAKES_PER_SECOND_PER_IP`   | 100       |                                                                                                                 |
+| `COLLAB_RATE_LIMITER_MAX_KEYS`          | 100000    | users or addresses each in-memory limiter remembers; past it the least recently used are dropped and counted    |
+| `COLLAB_MAX_BYTES_PER_SECOND_PER_USER`  | 524288    | shared by all of a user's sockets, per instance                                                                 |
+| `COLLAB_BYTE_BURST_PER_USER`            | 4194304   | at least the update maximum                                                                                     |
+| `COLLAB_MAX_IN_FLIGHT_BYTES`            | 67108864  | received but not yet processed, all sockets of the instance                                                     |
+| `COLLAB_MAX_PENDING_STRUCT_BYTES`       | 1048576   | updates waiting for a missing dependency, per document                                                          |
+| `COLLAB_TRUSTED_PROXY_HOPS`             | 0         | proxies in front that append to `X-Forwarded-For` (0 ignores it); **set it behind a proxy**, see operations.md  |
+| `COLLAB_INSTANCE_ID`                    | random    | names this instance in logs and relayed messages; set it when running several                                   |
+| `REDIS_MESSAGE_SECRET`                  | none      | required with `REDIS_URL`; signs the Redis messages                                                             |
+| `COLLAB_REDIS_CONNECT_TIMEOUT_MS`       | 5000      | start fails if Redis is not reachable within this                                                               |
+| `COLLAB_CONNECTION_TTL_MS`              | 45000     | a dead instance's connection slots expire after this                                                            |
+| `COLLAB_COMPACT_EVERY_UPDATES`          | 200       | compact the log into a snapshot after this many updates                                                         |
+| `COLLAB_COMPACT_AFTER_MS`               | 30000     | or this long after the first uncompacted update                                                                 |
+| `COLLAB_UNLOAD_GRACE_MS`                | 30000     | keep a document in memory this long after its last client left                                                  |
+| `COLLAB_RECONCILE_INTERVAL_MS`          | 5000      | how often an instance reads the log for updates it did not see                                                  |
+| `COLLAB_MEMBERSHIP_RECHECK_MS`          | 60000     | how often sockets are checked against the `Membership` table                                                    |
+| `COLLAB_ROLE_CACHE_MS`                  | 1000      | a socket's role is read again before a write if older than this                                                 |
 
 ## Security model
 
@@ -291,21 +297,24 @@ The README's screenshots are produced by `SCREENSHOTS=1 npm run test:e2e -- scre
 
 ## API
 
-All bodies are JSON and must be sent with `Content-Type: application/json`. A caller who is not a member of a document gets `404`, the same answer as for a document that does not exist.
+A route that reads a body takes JSON and answers `415` to any other `Content-Type`. A caller who is not a member of a document gets `404`, the same answer as for a document that does not exist.
 
-| Route                                        | Needs                  | Does                                                        |
-| -------------------------------------------- | ---------------------- | ----------------------------------------------------------- |
-| `POST /api/register`                         | nothing                | create a password account (same answer for a taken address) |
-| `POST /api/documents`                        | a session              | create a document; the caller owns it                       |
-| `GET /api/documents`                         | a session              | the documents the caller is a member of                     |
-| `GET /api/documents/:id`                     | `read`                 | one document and the caller's role                          |
-| `PATCH /api/documents/:id`                   | `write`                | rename                                                      |
-| `DELETE /api/documents/:id`                  | `delete`               | delete, with its memberships and data                       |
-| `GET /api/documents/:id/memberships`         | `read`                 | list members                                                |
-| `POST /api/documents/:id/memberships`        | `share`                | invite an address by email (always 202)                     |
-| `PATCH /api/documents/:id/memberships/:uid`  | `change-role`          | change a member's role                                      |
-| `DELETE /api/documents/:id/memberships/:uid` | `change-role`, or self | remove a member, or leave                                   |
-| `POST /api/documents/:id/collab-token`       | `read`                 | a signed token for the collab server                        |
+| Route                                             | Needs                  | Does                                                        |
+| ------------------------------------------------- | ---------------------- | ----------------------------------------------------------- |
+| `POST /api/register`                              | nothing                | create a password account (same answer for a taken address) |
+| `POST /api/verify-email`                          | nothing (a token)      | confirm an address with the token from the mail             |
+| `POST /api/verify-email/resend`                   | a session              | send the caller a new verification link                     |
+| `POST /api/documents`                             | a session              | create a document; the caller owns it                       |
+| `GET /api/documents`                              | a session              | the documents the caller is a member of                     |
+| `GET /api/documents/:id`                          | `read`                 | one document and the caller's role                          |
+| `PATCH /api/documents/:id`                        | `write`                | rename                                                      |
+| `DELETE /api/documents/:id`                       | `delete`               | delete, with its memberships and data                       |
+| `GET /api/documents/:id/memberships`              | `read`                 | list members (with emails) and pending invitations          |
+| `POST /api/documents/:id/memberships`             | `share`                | invite an address by email (always 202)                     |
+| `PATCH /api/documents/:id/memberships/:uid`       | `change-role`          | change a member's role                                      |
+| `DELETE /api/documents/:id/memberships/:uid`      | `change-role`, or self | remove a member, or leave                                   |
+| `DELETE /api/documents/:id/invitations/:inviteId` | `change-role`          | withdraw a pending invitation                               |
+| `POST /api/documents/:id/collab-token`            | `read`                 | a signed token for the collab server                        |
 
 The role model and the token are described in [SECURITY.md](SECURITY.md) and [docs/design/0002-roles-and-tokens.md](docs/design/0002-roles-and-tokens.md).
 
