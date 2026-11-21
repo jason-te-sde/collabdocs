@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -66,14 +66,29 @@ for (const [name, char] of cases) {
   });
 }
 
+// Every string that would trip the check is built at run time, so that this file is itself clean.
 const trailer = ["Co", "Authored", "By"].join("-");
+const generated = ["Gener", "ated"].join("");
 const attribution = [
   [`${trailer}: Someone <x@example.test>`, "a co-author trailer"],
   [`${trailer.toUpperCase()}: Someone`, "a co-author trailer in upper case"],
-  [["Gener", "ated with a tool"].join(""), "a generator line"],
-  [["written by Cl", "aude"].join(""), "a name"],
-  [["made by ANTHRO", "PIC"].join(""), "a vendor name in upper case"],
-  [["ask Chat", "GPT"].join(""), "another assistant"],
+  [
+    `${trailer}: ${["Some", "Tool"].join("")} <${["no", "reply@vendor.example"].join("")}>`,
+    "a trailer for any name",
+  ],
+  [`${generated} with a tool`, "a generator line"],
+  [`${generated.toUpperCase()} BY a tool`, "a generator line in upper case"],
+  [`*${generated} with a tool*`, "a generator line in italics"],
+  [`_${generated} by a tool_`, "a generator line in underscores"],
+  [`**${generated} with** a tool`, "a generator line in bold"],
+  [`[${generated} with a tool](https://tool.example)`, "a generator line with a link"],
+  [`Contact: ${["no", "reply@vendor.example"].join("")}`, "a vendor no-reply address"],
+  [
+    `Contact: ${["no-", "reply@vendor.example"].join("")}`,
+    "a vendor no-reply address with a hyphen",
+  ],
+  [["written by an ", "AI"].join(""), "a statement that an AI wrote it"],
+  [["AI-", "generated text"].join(""), "a label that credits a machine"],
   ["\u{1F916} done", "a robot emoji"],
 ];
 for (const [text, name] of attribution) {
@@ -88,6 +103,38 @@ for (const [text, name] of attribution) {
     assert.match(result.out, /commit [0-9a-f]{40}:3: attribution/);
   });
 }
+
+test("the patterns file names no tool, product or vendor", () => {
+  const patterns = readFileSync(
+    path.join(path.dirname(script), "attribution-patterns.txt"),
+    "utf8",
+  );
+  // Built at run time for the same reason as above; none of these may appear in the deny-list.
+  const names = [
+    ["cl", "aude"],
+    ["anthro", "pic"],
+    ["chat", "gpt"],
+    ["co", "pilot"],
+    ["open", "ai"],
+    ["gem", "ini"],
+    ["cur", "sor"],
+  ].map((parts) => parts.join(""));
+  for (const name of names) assert.doesNotMatch(patterns, new RegExp(name, "i"), name);
+});
+
+test("an author's own GitHub no-reply address is not attribution", () => {
+  const address = ["48173931+someone@users.", "no", "reply.github.com"].join("");
+  assert.equal(
+    run(repo({ "a.txt": `Author: ${address}` }, [`Add things\n\nSigned-off-by: ${address}`]))
+      .status,
+    0,
+  );
+});
+
+test("ordinary prose that mentions generating something is not attribution", () => {
+  const text = "The table is generated from the results files; a generated block is checked.";
+  assert.equal(run(repo({ "a.txt": text }, ["Regenerate the table"])).status, 0);
+});
 
 test("finds a violation in any commit of the history, not only the last", () => {
   const dir = repo({ "a.txt": "ok" }, ["first", `second\n\n${trailer}: Someone`, "third"]);

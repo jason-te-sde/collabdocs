@@ -1,8 +1,6 @@
 co-authored-by:
-generated (with|by)
-\bclaude\b
-\banthropic\b
-chatgpt
-copilot
+generated\s+(with|by)\b
+\bno-?reply@
+\b(written|authored|assisted)\s+(with|by)\s+(an?\s+)?(ai|llm|chatbot|assistant)\b
 \bAI[- ](generated|assisted|written|authored)
 \u{1F916}
