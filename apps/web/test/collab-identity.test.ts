@@ -85,3 +85,49 @@ describe("presentUsers and a state that claims another person's user id", () => 
     expect(users.map((u) => u.name)).toEqual(["Me"]);
   });
 });
+
+describe("presentUsers and another member's row", () => {
+  const ada = { user: { id: "u-ada", name: "Ada", color: "#047857" } };
+
+  it("is not changed by a state that carries a different user id, whatever name or colour it claims", () => {
+    // Client 3 is signed in as u-mallory and announces itself with Ada's name and colour.
+    const mallory = { user: { id: "u-mallory", name: "Ada", color: "#047857" } };
+    for (const order of [
+      [
+        [2, ada],
+        [3, mallory],
+      ],
+      [
+        [3, mallory],
+        [2, ada],
+      ],
+    ] as const) {
+      const users = presentUsers(new Map(order), 1);
+      expect(users).toHaveLength(2);
+      expect(users.find((u) => u.id === "u-ada")).toEqual({
+        id: "u-ada",
+        name: "Ada",
+        color: "#047857",
+        isSelf: false,
+      });
+      // The other state is its own row, under its own id.
+      expect(users.find((u) => u.id === "u-mallory")).toMatchObject({ isSelf: false });
+    }
+  });
+
+  it("is one row per id, the first one seen: the page cannot tell which client an id belongs to", () => {
+    // Two clients claiming u-ada is something only the collab server can rule out (it checks
+    // the id against the token, and writes the name itself). The page keeps the first and
+    // shows a single row, so a duplicate claim never adds a second person to the list.
+    const duplicate = { user: { id: "u-ada", name: "Someone else", color: "#b91c1c" } };
+    const users = presentUsers(
+      new Map<number, Record<string, unknown>>([
+        [2, ada],
+        [3, duplicate],
+      ]),
+      1,
+    );
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({ id: "u-ada", name: "Ada" });
+  });
+});
