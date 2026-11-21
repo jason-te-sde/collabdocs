@@ -10,6 +10,16 @@ export const MAX_TTL_SECONDS = 900;
 /** The longest display name a token carries; longer ones are cut when the token is signed. */
 export const MAX_NAME_CHARS = 80;
 
+/**
+ * The name cut to `MAX_NAME_CHARS` UTF-16 units (the unit the verifier counts), without
+ * leaving half of a surrogate pair at the end: a character outside the basic plane is two
+ * units, and half of it would show as a replacement character.
+ */
+function cutName(name: string): string {
+  const cut = name.slice(0, MAX_NAME_CHARS);
+  return /[\ud800-\udbff]$/.test(cut) && name.length > MAX_NAME_CHARS ? cut.slice(0, -1) : cut;
+}
+
 export interface CollabClaims {
   documentId: string;
   userId: string;
@@ -64,7 +74,7 @@ export async function signCollabToken(options: SignOptions): Promise<SignedColla
   }
   const issuedAt = options.now ?? Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttl;
-  const name = options.name.trim().slice(0, MAX_NAME_CHARS);
+  const name = cutName(options.name.trim());
   if (name === "") throw new RangeError("name must not be empty");
   const token = await new SignJWT({ doc: options.documentId, role: options.role, name })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })

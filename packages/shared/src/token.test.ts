@@ -178,6 +178,20 @@ describe("collaboration token", () => {
     );
   });
 
+  it("does not cut a character in two when it shortens a name", async () => {
+    // The emoji is two UTF-16 units and would straddle the cut at 80.
+    const name = `${"x".repeat(MAX_NAME_CHARS - 1)}\u{1F600}tail`;
+    const { token } = await signCollabToken({ ...claims, name, secret: SECRET, now: NOW });
+    const verified = await verifyCollabToken({
+      token,
+      secret: SECRET,
+      documentId: "doc_1",
+      now: NOW,
+    });
+    expect(verified.name).toBe("x".repeat(MAX_NAME_CHARS - 1));
+    expect(verified.name).not.toContain("\ufffd");
+  });
+
   it("rejects a validly signed token without a display name, or with one that is too long", async () => {
     const key = new TextEncoder().encode(SECRET);
     const make = (payload: Record<string, unknown>) =>
