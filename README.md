@@ -4,7 +4,7 @@ A real-time collaborative document editor: Yjs over Socket.IO, live cursors and 
 
 ## Status
 
-Version 0.1 is nearly complete. Built:
+Version 0.1.0 is the first release ([CHANGELOG](CHANGELOG.md)). It contains:
 
 - an npm workspaces monorepo: `apps/web` (Next.js, App Router), `apps/collab` (the collab server) and `packages/shared`;
 - the PostgreSQL schema and migrations, with the ownership and membership rules enforced by the database;
@@ -18,7 +18,7 @@ Version 0.1 is nearly complete. Built:
 - the sync-latency load test, with its protocol written down before the first run and its results committed ([Performance](#performance));
 - CI, including a Lighthouse gate (performance and accessibility of at least 0.92) and a check that every number in the Performance section is in a committed results file.
 
-Not done yet: the public release.
+What it leaves out, on purpose, is listed under "Known limits" in [SECURITY.md](SECURITY.md) (no password reset, no transfer of ownership, no rate limit on the document routes) and under "Not measured" in [Performance](#performance).
 
 ## The editor
 
