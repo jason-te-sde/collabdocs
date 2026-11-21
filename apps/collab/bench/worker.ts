@@ -17,8 +17,8 @@ export interface WorkerConfig {
   workerIndex: number;
   url: string;
   documentId: string;
-  /** Editors of this worker: their global index, token and whether they write. */
-  editors: Array<{ index: number; token: string; writer: boolean }>;
+  /** Editors of this worker: their global index, user id, token and whether they write. */
+  editors: Array<{ index: number; userId: string; token: string; writer: boolean }>;
   typingIntervalMs: number;
   readerCursorIntervalMs: number;
   /** A folder for the binary logs, which the parent reads. */
@@ -52,6 +52,7 @@ const editors = config.editors.map(
   (e) =>
     new LoadEditor({
       index: e.index,
+      userId: e.userId,
       url: config.url,
       token: e.token,
       documentId: config.documentId,

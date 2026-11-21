@@ -409,6 +409,7 @@ export async function startCollabServer(
     );
     const onEvent =
       (handle: "onSync" | "onAwareness") =>
+        name: claims.name,
       (payload: unknown): void => {
         // Both budgets are checked on arrival, before anything is queued, so a flood
         // while the document loads cannot grow memory.

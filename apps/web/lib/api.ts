@@ -119,6 +119,7 @@ export async function readBody<T extends z.ZodType>(
 export interface SessionUser {
   id: string;
   email: string;
+  name: string | null;
 }
 
 /**
@@ -129,7 +130,10 @@ export async function requireUser(): Promise<SessionUser> {
   const session = await auth();
   const id = session?.user?.id;
   if (!id) throw new HttpError(401, "unauthenticated", "Sign in first");
-  const user = await getDb().user.findUnique({ where: { id }, select: { id: true, email: true } });
+  const user = await getDb().user.findUnique({
+    where: { id },
+    select: { id: true, email: true, name: true },
+  });
   if (!user) throw new HttpError(401, "unauthenticated", "Sign in first");
   return user;
 }

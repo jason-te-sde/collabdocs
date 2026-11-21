@@ -142,7 +142,7 @@ class PropertyClient {
     private readonly who: string,
     private readonly role: "owner" | "editor",
   ) {
-    this.awareness.setLocalState({ user: { name: who } });
+    this.awareness.setLocalState({ user: { id: fixture.users[who], name: who } });
     this.doc.on("update", (update: Uint8Array, origin: unknown) => {
       // While offline nothing is queued: the next handshake carries the difference.
       if (origin === SERVER_ORIGIN || !this.socket?.connected) return;

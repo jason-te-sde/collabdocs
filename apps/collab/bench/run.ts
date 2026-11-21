@@ -24,7 +24,7 @@ import { signCollabToken } from "@collabdocs/shared";
 import { Redis } from "ioredis";
 import pg from "pg";
 import * as Y from "yjs";
-import { nowMs } from "./client";
+import { nameOf, nowMs } from "./client";
 import { joinLatencies } from "./join";
 import { processUsage, provenance, waitForQuiet } from "./machine";
 import { measureSkew } from "./skew";
@@ -116,7 +116,7 @@ async function fixture(pool: pg.Pool): Promise<void> {
       await client.query('INSERT INTO "User" ("id", "email", "name") VALUES ($1, $2, $3)', [
         userId(i),
         `bench-${runId}-${i}@bench.invalid`,
-        `Editor ${i}`,
+        nameOf(i),
       ]);
     }
     await client.query(
@@ -279,6 +279,7 @@ async function main(): Promise<void> {
       documentId,
       userId: userId(i),
       role: i === 0 ? "owner" : "editor",
+      name: nameOf(i),
       secret: tokenSecret,
     });
     tokens.push(token);
@@ -289,7 +290,7 @@ async function main(): Promise<void> {
   for (let w = 0; w < workerCount; w += 1) {
     const share = [];
     for (let i = w * perWorker; i < Math.min(editors, (w + 1) * perWorker); i += 1) {
-      share.push({ index: i, token: tokens[i]!, writer: isWriter(i) });
+      share.push({ index: i, userId: userId(i), token: tokens[i]!, writer: isWriter(i) });
     }
     const config: WorkerConfig = {
       workerIndex: w,

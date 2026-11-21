@@ -2,6 +2,7 @@ import { verifyCollabToken } from "@collabdocs/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { POST as issueToken } from "@/app/api/documents/[id]/collab-token/route";
 import { collabTokenConfig } from "@/lib/collab-token";
+import { getDb } from "@/lib/db";
 import { ctx, fixture, jsonRequest, signInAs } from "./helpers";
 
 const SECRET = process.env.COLLAB_TOKEN_SECRET!;
@@ -31,12 +32,29 @@ describe("POST /documents/:id/collab-token", () => {
         secret: SECRET,
         documentId: f.documentId,
       });
-      expect(claims).toEqual({ documentId: f.documentId, userId: f.users[who].id, role });
+      expect(claims).toEqual({
+        documentId: f.documentId,
+        userId: f.users[who].id,
+        role,
+        name: who,
+      });
       const lifetime = body.expiresAt - Math.floor(Date.now() / 1000);
       expect(lifetime).toBeGreaterThan(290);
       expect(lifetime).toBeLessThanOrEqual(300);
     });
   }
+
+  it("carries the display name the session vouches for: the name, or the email's local part", async () => {
+    const f = await fixture();
+    const claimsFor = async () => {
+      const { token } = await (await issue(f.documentId)).json();
+      return verifyCollabToken({ token, secret: SECRET, documentId: f.documentId });
+    };
+    signInAs(f.users.editor.id);
+    expect((await claimsFor()).name).toBe("editor");
+    await getDb().user.update({ where: { id: f.users.editor.id }, data: { name: null } });
+    expect((await claimsFor()).name).toBe(f.users.editor.email.split("@")[0]);
+  });
 
   it("answers 404 to a non-member and 401 to nobody, and issues nothing", async () => {
     const f = await fixture();

@@ -53,19 +53,26 @@ const MAX_AWARENESS_IDS_PER_SOCKET = 8;
 /** The most states one awareness message may carry. */
 const MAX_AWARENESS_ENTRIES = 16;
 
-/** The client ids an awareness update touches, or null if it is not well formed. */
-function awarenessIds(bytes: Uint8Array): number[] | null {
+/** One state of an awareness update: a client id, its clock and its state (null removes it). */
+interface AwarenessEntry {
+  id: number;
+  clock: number;
+  state: unknown;
+}
+
+/** The entries of an awareness update, or null if it is not well formed. */
+function parseAwareness(bytes: Uint8Array): AwarenessEntry[] | null {
   try {
     const decoder = decoding.createDecoder(bytes);
     const count = decoding.readVarUint(decoder);
     if (count > MAX_AWARENESS_ENTRIES) return null;
-    const ids: number[] = [];
+    const entries: AwarenessEntry[] = [];
     for (let i = 0; i < count; i += 1) {
-      ids.push(decoding.readVarUint(decoder));
-      decoding.readVarUint(decoder); // clock
-      decoding.readVarString(decoder); // state, as JSON
+      const id = decoding.readVarUint(decoder);
+      const clock = decoding.readVarUint(decoder);
+      entries.push({ id, clock, state: JSON.parse(decoding.readVarString(decoder)) as unknown });
     }
-    return ids;
+    return entries;
   } catch {
     return null;
   }
@@ -78,6 +85,18 @@ function encodeSync(write: (encoder: encoding.Encoder) => void): Uint8Array {
 }
 
 type State = "loading" | "ready" | "closing" | "gone";
+/** The inverse of `parseAwareness`, in the y-protocols wire format. */
+function encodeAwarenessEntries(entries: AwarenessEntry[]): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, entries.length);
+  for (const entry of entries) {
+    encoding.writeVarUint(encoder, entry.id);
+    encoding.writeVarUint(encoder, entry.clock);
+    encoding.writeVarString(encoder, JSON.stringify(entry.state));
+  }
+  return encoding.toUint8Array(encoder);
+}
+
 
 /**
  * One document held in memory by one instance: its Y.Doc, its awareness state,
@@ -406,9 +425,12 @@ export class DocumentEntry {
 
   /**
    * An awareness update (cursor, name, colour). Needs `read`: a viewer may show a
-   * cursor. An awareness id belongs to the user who first announced it: a socket
-   * may set or remove the states of its own user's ids and no others, so nobody
-   * can fake or erase another person's presence.
+   * cursor. Two things are bound to the sender, so nobody can fake or erase another
+   * person's presence. An awareness id belongs to the user who first announced it: a
+   * socket may set or remove the states of its own user's ids and no others. And every
+   * state a socket sets must name that socket's own user (`user.id`); the name that is
+   * shown is the one in the token, which the web app wrote from the session, and it
+   * replaces whatever name the client put in the state.
    */
   async onAwareness(socket: CollabSocket, payload: unknown): Promise<void> {
     const event = COLLAB_EVENTS.awareness;
@@ -419,11 +441,11 @@ export class DocumentEntry {
     if (bytes.byteLength > this.deps.limits.maxAwarenessBytes) {
       return this.reject(socket, event, "too_large", `${bytes.byteLength} bytes`);
     }
-    const ids = awarenessIds(bytes);
-    if (!ids) return this.reject(socket, event, "malformed", "unreadable awareness update");
+    const entries = parseAwareness(bytes);
+    if (!entries) return this.reject(socket, event, "malformed", "unreadable awareness update");
     const { userId, origin } = socket.data;
     let fresh = 0;
-    for (const id of ids) {
+    for (const { id } of entries) {
       const owner = this.awarenessOwners.get(id);
       if (owner !== undefined && owner !== userId) {
         return this.reject(socket, event, "forbidden", "client id belongs to another user");
@@ -438,10 +460,14 @@ export class DocumentEntry {
     // does not erase them.
     for (const other of this.sockets) {
       if (other === socket) continue;
-      for (const id of ids) other.data.origin.awarenessIds.delete(id);
+      for (const { id } of entries) other.data.origin.awarenessIds.delete(id);
     }
     try {
-      awarenessProtocol.applyAwarenessUpdate(this.awareness, bytes, origin);
+      awarenessProtocol.applyAwarenessUpdate(
+        this.awareness,
+        encodeAwarenessEntries(entries),
+        origin,
+      );
     } catch (error) {
       this.reject(socket, event, "malformed", errorFields(error).detail as string);
     }
@@ -477,6 +503,11 @@ export class DocumentEntry {
    * Reads the log past this entry's cursor and applies what it finds. Pub/sub is
    * at-most-once; this makes it a latency optimisation rather than the thing
    * convergence depends on. Applying an update twice is a no-op in Yjs.
+    for (const entry of entries) {
+      if (entry.state === null) continue; // a removal needs no identity, only ownership
+      const problem = this.vouchFor(socket, entry);
+      if (problem) return this.reject(socket, event, problem.reason, problem.detail);
+    }
    */
   private async reconcile(): Promise<void> {
     if (this.state !== "ready") return;
@@ -491,6 +522,30 @@ export class DocumentEntry {
           this.deps.logger.error("stored update could not be applied", {
             documentId: this.id,
             seq: row.seq,
+  /**
+   * Checks that a presence state names the socket's own user and puts the name from
+   * the token into it. Returns why the state is refused, or null when it passes (the
+   * entry is then rewritten in place).
+   */
+  private vouchFor(
+    socket: CollabSocket,
+    entry: AwarenessEntry,
+  ): { reason: RejectReason; detail: string } | null {
+    const { state } = entry;
+    if (typeof state !== "object" || state === null || Array.isArray(state)) {
+      return { reason: "malformed", detail: "presence state is not an object" };
+    }
+    const user = (state as { user?: unknown }).user;
+    if (typeof user !== "object" || user === null || Array.isArray(user)) {
+      return { reason: "forbidden", detail: "presence carries no user" };
+    }
+    if ((user as { id?: unknown }).id !== socket.data.userId) {
+      return { reason: "forbidden", detail: "presence names another user" };
+    }
+    entry.state = { ...state, user: { ...user, name: socket.data.name } };
+    return null;
+  }
+
             ...errorFields(error),
           });
         }

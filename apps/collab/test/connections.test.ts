@@ -320,6 +320,7 @@ describe("one anonymous client cannot lock out the others behind the same addres
       documentId: f.documentId,
       userId: `${f.users.owner!}${"x".repeat(3000)}`,
       role: "owner",
+      name: "Owner",
       secret: TOKEN_SECRET,
     });
     expect(token.length).toBeGreaterThan(2048);

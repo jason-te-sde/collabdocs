@@ -346,8 +346,11 @@ export class CollabProvider {
     // an update whose clock is not higher than the one it holds, so announce
     // ourselves with a clock two higher; otherwise an idle client stays
     // invisible after a reconnect until it moves its cursor.
+    //
+    // The server refuses a presence state that does not name its user, so nothing is
+    // announced until the editor has set one (the initial empty state is not announced).
     const local = this.awareness.getLocalState();
-    if (local) {
+    if (local && typeof local["user"] === "object" && local["user"] !== null) {
       this.awareness.setLocalState(local);
       this.awareness.setLocalState(local);
       this.send(

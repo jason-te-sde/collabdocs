@@ -262,12 +262,13 @@ export async function mintToken(
   documentId: string,
   userId: string,
   role: Role,
-  extra: { ttlSeconds?: number; now?: number; secret?: string } = {},
+  extra: { ttlSeconds?: number; now?: number; secret?: string; name?: string } = {},
 ): Promise<string> {
   const { token } = await signCollabToken({
     documentId,
     userId,
     role,
+    name: extra.name ?? "Test User",
     secret: extra.secret ?? TOKEN_SECRET,
     ...(extra.ttlSeconds === undefined ? {} : { ttlSeconds: extra.ttlSeconds }),
     ...(extra.now === undefined ? {} : { now: extra.now }),
@@ -301,6 +302,9 @@ export class TestClient {
   socket!: Socket;
   synced = false;
   disconnects = 0;
+  /** The user this client signed in as, and the name its token carries. Set by `connect`. */
+  userId = "";
+  who = "";
   private readonly server = Symbol("server");
 
   private constructor(private readonly manual: boolean) {}
@@ -316,12 +320,15 @@ export class TestClient {
     clients.push(client);
     const userId = fixture.users[who];
     if (!userId) throw new Error(`no user ${who} in the fixture`);
+    client.userId = userId;
+    client.who = who;
     const token =
       options.token ??
       (await mintToken(
         options.tokenDocumentId ?? fixture.documentId,
         userId,
         options.tokenRole ?? role,
+        { name: who },
       ));
     options.offline?.(client.doc);
     client.open(server.port, fixture.documentId, token);
@@ -388,6 +395,14 @@ export class TestClient {
         );
       },
     );
+  }
+
+  /**
+   * A presence state as the editor announces it: this client's user (id, name, colour), plus
+   * `extra` fields. Pass it to `awareness.setLocalState`; the server refuses any other.
+   */
+  state(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { user: { id: this.userId, name: this.who, color: "#1d4ed8" }, ...extra };
   }
 
   /** Sends an update message whether or not this client's role allows it. */

@@ -7,10 +7,19 @@ export const MIN_SECRET_BYTES = 32;
 export const DEFAULT_TTL_SECONDS = 300;
 export const MAX_TTL_SECONDS = 900;
 
+/** The longest display name a token carries; longer ones are cut when the token is signed. */
+export const MAX_NAME_CHARS = 80;
+
 export interface CollabClaims {
   documentId: string;
   userId: string;
   role: Role;
+  /**
+   * The name other people see next to this user's cursor. The web app puts it here from
+   * the session, so the collab server can show a name that the user did not choose
+   * for the occasion.
+   */
+  name: string;
 }
 
 export interface SignedCollabToken {
@@ -55,7 +64,9 @@ export async function signCollabToken(options: SignOptions): Promise<SignedColla
   }
   const issuedAt = options.now ?? Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttl;
-  const token = await new SignJWT({ doc: options.documentId, role: options.role })
+  const name = options.name.trim().slice(0, MAX_NAME_CHARS);
+  if (name === "") throw new RangeError("name must not be empty");
+  const token = await new SignJWT({ doc: options.documentId, role: options.role, name })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(COLLAB_TOKEN_ISSUER)
     .setAudience(COLLAB_TOKEN_AUDIENCE)
@@ -99,10 +110,23 @@ export async function verifyCollabToken(options: VerifyOptions): Promise<CollabC
       throw error;
     throw new CollabTokenError("malformed");
   }
-  const { doc, role, sub } = payload as { doc?: unknown; role?: unknown; sub?: string };
-  if (typeof doc !== "string" || !isRole(role) || typeof sub !== "string" || sub === "") {
+  const { doc, role, sub, name } = payload as {
+    doc?: unknown;
+    role?: unknown;
+    sub?: string;
+    name?: unknown;
+  };
+  if (
+    typeof doc !== "string" ||
+    !isRole(role) ||
+    typeof sub !== "string" ||
+    sub === "" ||
+    typeof name !== "string" ||
+    name === "" ||
+    name.length > MAX_NAME_CHARS
+  ) {
     throw new CollabTokenError("bad-claims");
   }
   if (doc !== options.documentId) throw new CollabTokenError("wrong-document");
-  return { documentId: doc, userId: sub, role };
+  return { documentId: doc, userId: sub, role, name };
 }

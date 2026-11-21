@@ -33,6 +33,8 @@ export interface SocketData {
   documentId: string;
   userId: string;
   /** The role this socket acts with: the weaker of the token's role and the membership at connect time. */
+  /** The display name from the token: what other people see for this user's presence. */
+  name: string;
   role: Role;
   /** The membership role found in the database at connect time. */
   memberRole: Role;

@@ -157,7 +157,7 @@ describe("limits", () => {
     const f = await createDocument();
     const flooder = await TestClient.connect(server, f, "owner", "owner");
     const other = await TestClient.connect(server, f, "editor", "editor");
-    for (let i = 0; i < 50; i += 1) flooder.awareness.setLocalState({ i });
+    for (let i = 0; i < 50; i += 1) flooder.awareness.setLocalState(flooder.state({ i }));
     await waitFor(() => !flooder.connected, "the flooder to be disconnected");
     expect(server.logs.find("rate limit exceeded; disconnecting")).toHaveLength(1);
     expect(other.connected).toBe(true);

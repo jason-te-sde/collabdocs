@@ -88,7 +88,7 @@ describe("two instances behind Redis", () => {
     const f = await createDocument();
     const onA = await TestClient.connect(a, f, "owner", "owner");
     const onB = await TestClient.connect(b, f, "editor", "editor");
-    onA.awareness.setLocalState({ name: "Ada" });
+    onA.awareness.setLocalState(onA.state({ name: "Ada" }));
     await waitFor(
       () => onB.awareness.getStates().get(onA.doc.clientID)?.name === "Ada",
       "presence on B",

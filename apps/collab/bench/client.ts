@@ -37,6 +37,8 @@ export class Rows {
 export interface EditorOptions {
   /** Position among all editors of the run; also names the user and sets the Yjs client id. */
   index: number;
+  /** The user this editor signs in as; the server accepts presence only for this id. */
+  userId: string;
   url: string;
   token: string;
   documentId: string;
@@ -54,6 +56,11 @@ export interface EditorOptions {
 const SERVER = Symbol("server");
 const COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz      ";
+
+/** The name of editor `index`, in its token; the server shows it on the editor's presence entry. */
+export function nameOf(index: number): string {
+  return `Editor ${index}`;
+}
 
 /** The Yjs client id of editor `index`. Fixed, so that receivers can tell whose edit arrived. */
 export function clientIdOf(index: number): number {
@@ -89,7 +96,11 @@ export class LoadEditor {
     this.text = this.doc.getText("text");
     this.cursor = 0;
     this.awareness.setLocalState({
-      user: { name: `Editor ${options.index}`, color: COLORS[options.index % COLORS.length] },
+      user: {
+        id: options.userId,
+        name: nameOf(options.index),
+        color: COLORS[options.index % COLORS.length],
+      },
     });
   }
 

@@ -385,6 +385,17 @@ describe("CollabProvider", () => {
     expect(socket.sent("awareness")).not.toHaveLength(0);
   });
 
+  it("announces nothing on connect while the state names no user", async () => {
+    // The server refuses a presence state without a user, so an empty one stays home.
+    const { socket, provider } = setup();
+    provider.connect();
+    await flush();
+    socket.accept();
+    expect(socket.sent("awareness")).toEqual([]);
+    provider.awareness.setLocalStateField("user", { id: "u1", name: "me" });
+    expect(socket.sent("awareness")).toHaveLength(1);
+  });
+
   it("stops everything on destroy", async () => {
     const { socket, provider, fetchToken } = setup();
     provider.connect();

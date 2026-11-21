@@ -46,3 +46,42 @@ describe("presentUsers", () => {
     expect(USER_COLORS).toContain(bob?.color);
   });
 });
+
+describe("presentUsers and a state that claims another person's user id", () => {
+  // The collab server refuses such a state (it checks `user.id` against the token), so none
+  // reaches the page from an honest server. These tests pin what the list does with one anyway:
+  // an id is one row, whoever claims it, and the local user's row cannot be displaced.
+  const me = { user: { id: "u-me", name: "Me", color: "#1d4ed8" } };
+  const mallory = { user: { id: "u-me", name: "Mallory", color: "#b91c1c" } };
+
+  it("keeps the local user's own row when another client claims the same id, in either order", () => {
+    for (const order of [
+      [
+        [9, mallory],
+        [1, me],
+      ],
+      [
+        [1, me],
+        [9, mallory],
+      ],
+    ] as const) {
+      const users = presentUsers(new Map(order), 1);
+      expect(users).toHaveLength(1);
+      expect(users[0]).toMatchObject({ id: "u-me", name: "Me", isSelf: true });
+    }
+  });
+
+  it("adds no row for a state whose user id is not a string", () => {
+    const users = presentUsers(
+      new Map<number, Record<string, unknown>>([
+        [1, me],
+        [2, { user: { id: 7, name: "Seven" } }],
+        [3, { user: { id: { toString: "x" }, name: "Object" } }],
+        [4, { user: null }],
+        [5, { user: "u-me" }],
+      ]),
+      1,
+    );
+    expect(users.map((u) => u.name)).toEqual(["Me"]);
+  });
+});

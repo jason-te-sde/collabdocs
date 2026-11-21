@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SignJWT } from "jose";
 import {
   CollabTokenError,
+  MAX_NAME_CHARS,
   MAX_TTL_SECONDS,
   signCollabToken,
   verifyCollabToken,
@@ -11,7 +12,12 @@ import {
 const SECRET = "0123456789abcdef0123456789abcdef-test-secret";
 const OTHER_SECRET = "fedcba9876543210fedcba9876543210-other-secret";
 const NOW = 1_800_000_000;
-const claims = { documentId: "doc_1", userId: "user_1", role: "editor" as const };
+const claims = {
+  documentId: "doc_1",
+  userId: "user_1",
+  role: "editor" as const,
+  name: "Ada Lovelace",
+};
 
 async function reason(promise: Promise<unknown>): Promise<CollabTokenFailure | "no error"> {
   try {
@@ -24,7 +30,7 @@ async function reason(promise: Promise<unknown>): Promise<CollabTokenFailure | "
 }
 
 describe("collaboration token", () => {
-  it("round-trips the document, user and role", async () => {
+  it("round-trips the document, user, role and display name", async () => {
     const { token, expiresAt } = await signCollabToken({ ...claims, secret: SECRET, now: NOW });
     expect(expiresAt).toBe(NOW + 300);
     const verified = await verifyCollabToken({
@@ -130,7 +136,7 @@ describe("collaboration token", () => {
   it("rejects a validly signed token with another audience or an unknown role", async () => {
     const key = new TextEncoder().encode(SECRET);
     const base = () =>
-      new SignJWT({ doc: "doc_1", role: "editor" })
+      new SignJWT({ doc: "doc_1", role: "editor", name: "Ada" })
         .setProtectedHeader({ alg: "HS256" })
         .setIssuer("collabdocs-web")
         .setSubject("user_1")
@@ -142,7 +148,7 @@ describe("collaboration token", () => {
         verifyCollabToken({ token: wrongAudience, secret: SECRET, documentId: "doc_1", now: NOW }),
       ),
     ).toBe("bad-claims");
-    const badRole = await new SignJWT({ doc: "doc_1", role: "admin" })
+    const badRole = await new SignJWT({ doc: "doc_1", role: "admin", name: "Ada" })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuer("collabdocs-web")
       .setAudience("collabdocs-collab")
@@ -155,6 +161,45 @@ describe("collaboration token", () => {
         verifyCollabToken({ token: badRole, secret: SECRET, documentId: "doc_1", now: NOW }),
       ),
     ).toBe("bad-claims");
+  });
+
+  it("cuts a long display name when signing and refuses an empty one", async () => {
+    const long = "x".repeat(MAX_NAME_CHARS + 50);
+    const { token } = await signCollabToken({ ...claims, name: long, secret: SECRET, now: NOW });
+    const verified = await verifyCollabToken({
+      token,
+      secret: SECRET,
+      documentId: "doc_1",
+      now: NOW,
+    });
+    expect(verified.name).toBe("x".repeat(MAX_NAME_CHARS));
+    await expect(signCollabToken({ ...claims, name: "  ", secret: SECRET })).rejects.toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects a validly signed token without a display name, or with one that is too long", async () => {
+    const key = new TextEncoder().encode(SECRET);
+    const make = (payload: Record<string, unknown>) =>
+      new SignJWT({ doc: "doc_1", role: "editor", ...payload })
+        .setProtectedHeader({ alg: "HS256" })
+        .setIssuer("collabdocs-web")
+        .setAudience("collabdocs-collab")
+        .setSubject("user_1")
+        .setIssuedAt(NOW)
+        .setExpirationTime(NOW + 300)
+        .sign(key);
+    for (const payload of [
+      {},
+      { name: "" },
+      { name: 7 },
+      { name: "x".repeat(MAX_NAME_CHARS + 1) },
+    ]) {
+      const token = await make(payload);
+      expect(
+        await reason(verifyCollabToken({ token, secret: SECRET, documentId: "doc_1", now: NOW })),
+      ).toBe("bad-claims");
+    }
   });
 
   it("refuses a short secret and an excessive lifetime", async () => {

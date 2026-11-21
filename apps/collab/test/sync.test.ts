@@ -75,9 +75,9 @@ describe("sync", () => {
     editor.append(" more");
     await waitFor(() => viewer.text === "readable more", "a live update to reach the viewer");
 
-    viewer.awareness.setLocalState({ user: "viewer-cursor" });
+    viewer.awareness.setLocalState(viewer.state({ cursor: "viewer-cursor" }));
     await waitFor(
-      () => [...editor.awareness.getStates().values()].some((s) => s.user === "viewer-cursor"),
+      () => [...editor.awareness.getStates().values()].some((s) => s.cursor === "viewer-cursor"),
       "the viewer's cursor",
     );
     expect(viewer.rejected).toEqual([]);
@@ -139,7 +139,7 @@ describe("sync", () => {
     const f = await createDocument();
     const a = await TestClient.connect(server, f, "owner", "owner");
     const b = await TestClient.connect(server, f, "editor", "editor");
-    a.awareness.setLocalState({ name: "Ada" });
+    a.awareness.setLocalState(a.state({ name: "Ada" }));
     await waitFor(
       () => b.awareness.getStates().get(a.doc.clientID)?.name === "Ada",
       "A's presence",
