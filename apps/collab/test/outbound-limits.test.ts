@@ -207,7 +207,7 @@ describe("what the server queues is measured and bounded on real queues", () => 
     // path runs: only the sweep can find it, at its second look at a queue that has not shrunk.
     stuff(serverSide);
 
-    await waitFor(() => !serverSide.connected, "the sweep to close the connection", 4000);
+    await waitFor(() => !serverSide.connected, "the sweep to close the connection", 7000);
     expect(
       server.logs.find("outbound queue over the cap and not draining; closing the connection"),
     ).toHaveLength(1);

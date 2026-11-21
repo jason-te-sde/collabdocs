@@ -5,6 +5,7 @@ import {
   guardConnection,
   queuedBytes,
   queuedPackets,
+  STALL_WINDOW_MS,
   stalledOverCap,
 } from "../src/outbound";
 import { connectNamespace } from "../src/server";
@@ -117,30 +118,57 @@ describe("a connection that is over a cap and not draining", () => {
   /** A connection whose queue is whatever the test sets, for the sweep to look at. */
   function queued() {
     const c = fakeConnection();
+    let now = 1_000_000;
     return {
       conn: c.conn,
+      queue: c.queue,
       setBytes(bytes: number) {
         c.transport.socket.bufferedAmount = bytes;
       },
       setPending(pending: number) {
         c.transport.socket._socket._handle.writeQueueSize = pending;
       },
+      /** A sweep `afterMs` after the last one. */
+      sweep(afterMs: number, maxBytes = 4_000_000, maxPackets = 1000) {
+        now += afterMs;
+        return stalledOverCap(c.conn, maxBytes, maxPackets, now);
+      },
     };
   }
 
   it("is left alone while its queue shrinks between sweeps, however long it is over the cap", () => {
     const q = queued();
-    for (const bytes of [14_000_000, 11_000_000, 8_000_000, 5_000_000, 3_000_000]) {
+    q.setBytes(20_000_000);
+    q.sweep(0);
+    for (let bytes = 19_000_000; bytes > 4_000_000; bytes -= 500_000) {
       q.setBytes(bytes);
-      expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+      expect(q.sweep(500)).toBe(false);
     }
   });
 
-  it("is stalled at the second sweep over the cap in which the queue has not shrunk", () => {
+  it("is closed only after the stall window with no progress, not at the second sweep", () => {
     const q = queued();
     q.setBytes(14_000_000);
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(true);
+    expect(q.sweep(0)).toBe(false);
+    for (let elapsed = 500; elapsed < STALL_WINDOW_MS; elapsed += 500) {
+      expect(q.sweep(500)).toBe(false);
+    }
+    expect(q.sweep(500)).toBe(true);
+  });
+
+  it("is left alone when progress comes in steps that are further apart than one sweep", () => {
+    // A bursty reader: nothing moves for 700 ms, then the kernel takes a burst.
+    const q = queued();
+    q.setBytes(14_000_000);
+    q.setPending(14_000_000);
+    q.sweep(0);
+    let pending = 14_000_000;
+    for (let burst = 0; burst < 8; burst += 1) {
+      expect(q.sweep(500)).toBe(false);
+      expect(q.sweep(500)).toBe(false);
+      pending -= 1_500_000;
+      q.setPending(pending);
+    }
   });
 
   it("is left alone while the kernel keeps taking bytes, though a message still being written counts in full", () => {
@@ -148,29 +176,32 @@ describe("a connection that is over a cap and not draining", () => {
     const q = queued();
     q.setBytes(14_000_000);
     q.setPending(14_000_000);
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    q.sweep(0);
     for (const pending of [11_000_000, 8_000_000, 5_000_000]) {
       q.setPending(pending);
-      expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+      expect(q.sweep(2000)).toBe(false);
     }
-    // The kernel stops taking bytes: the next sweep finds it stalled.
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(true);
+    // The kernel stops taking bytes: closed once the window has passed.
+    expect(q.sweep(1000)).toBe(false);
+    expect(q.sweep(STALL_WINDOW_MS)).toBe(true);
   });
 
-  it("is stalled when the queue grows, and not when it was under the cap at the sweep before", () => {
+  it("is not stalled while under every cap, and its window starts when it goes over", () => {
     const q = queued();
     q.setBytes(1_000_000);
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
+    expect(q.sweep(0)).toBe(false);
+    expect(q.sweep(10_000)).toBe(false);
     q.setBytes(9_000_000);
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(false);
-    q.setBytes(9_500_000);
-    expect(stalledOverCap(q.conn, 4_000_000, 1000)).toBe(true);
+    expect(q.sweep(500)).toBe(false);
+    expect(q.sweep(STALL_WINDOW_MS - 500)).toBe(false);
+    expect(q.sweep(500)).toBe(true);
   });
 
   it("counts packets the same way", () => {
-    const c = fakeConnection();
-    for (let i = 0; i < 50; i += 1) c.queue("a");
-    expect(stalledOverCap(c.conn, 1_000_000, 10)).toBe(false);
-    expect(stalledOverCap(c.conn, 1_000_000, 10)).toBe(true);
+    const q = queued();
+    for (let i = 0; i < 50; i += 1) q.queue("a");
+    expect(q.sweep(0, 1_000_000, 10)).toBe(false);
+    expect(q.sweep(STALL_WINDOW_MS - 1, 1_000_000, 10)).toBe(false);
+    expect(q.sweep(1, 1_000_000, 10)).toBe(true);
   });
 });

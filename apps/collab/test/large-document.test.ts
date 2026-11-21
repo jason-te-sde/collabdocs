@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TestClient, cleanup, closeDb, createDocument, launch, resetDb, waitFor } from "./support";
-import { engineConnections } from "../src/outbound";
+import { STALL_WINDOW_MS, engineConnections } from "../src/outbound";
 
 beforeEach(resetDb);
 afterEach(cleanup);
@@ -22,6 +22,8 @@ interface PausableSocket {
   pause(): void;
   read(): unknown;
   bytesRead: number;
+  resume(): unknown;
+  on(event: "data", listener: (chunk: Buffer) => void): unknown;
 }
 
 /** The client's TCP socket, from the WebSocket transport of its Socket.IO connection. */
@@ -34,7 +36,7 @@ async function tcpSocketOf(client: TestClient): Promise<PausableSocket> {
 
 describe("a document as large as the document cap", () => {
   it(
-    "opens for a client that reads at a steady few MB/s and announces presence, without a close",
+    "opens for a client that reads at a steady 1.6 MB/s and announces presence, without a close",
     { timeout: 120_000 },
     async () => {
       const server = await launch();
@@ -43,10 +45,10 @@ describe("a document as large as the document cap", () => {
 
       const client = await TestClient.connect(server, f, "viewer", "viewer", { noWait: true });
       const tcp = await tcpSocketOf(client);
-      // Up to 64 KB every 20 ms: about 3 MB/s, a 25 Mbit/s link. The download takes
+      // Up to 64 KB every 40 ms: about 1.6 MB/s, a 13 Mbit/s link. The download takes
       // several seconds, many sweeps, and the queue shrinks all the time.
       tcp.pause();
-      const reader = setInterval(() => tcp.read(), 20);
+      const reader = setInterval(() => tcp.read(), 40);
       let moves = 0;
       const presence = setInterval(() => {
         if (client.connected) client.awareness.setLocalState(client.state({ move: (moves += 1) }));
@@ -88,7 +90,45 @@ describe("a document as large as the document cap", () => {
     },
   );
 
-  it("is not kept open for a client that stops reading: it is closed within four seconds", async () => {
+  it(
+    "opens for a client that reads in bursts of 1.5 MB with 700 ms between them, without a close",
+    { timeout: 120_000 },
+    async () => {
+      const server = await launch();
+      const f = await createDocument();
+      await storeDocument(server, f.documentId, DOCUMENT_BYTES);
+
+      const client = await TestClient.connect(server, f, "viewer", "viewer", { noWait: true });
+      const tcp = await tcpSocketOf(client);
+      // About 1.8 MB/s on average, but in steps further apart than one sweep: the kernel makes
+      // room for the server's writes only when the client has read a burst.
+      tcp.pause();
+      let burst = 0;
+      tcp.on("data", (chunk) => {
+        burst += chunk.length;
+        if (burst >= 1_500_000) {
+          burst = 0;
+          tcp.pause();
+          setTimeout(() => tcp.resume(), 700);
+        }
+      });
+      tcp.resume();
+      try {
+        await waitFor(() => client.synced, "the whole document to arrive", 45_000);
+      } finally {
+        burst = Number.NEGATIVE_INFINITY;
+        tcp.resume();
+      }
+      expect(client.text.length).toBe(DOCUMENT_BYTES);
+      expect(client.connected).toBe(true);
+      expect(client.disconnects).toBe(0);
+      expect(
+        server.logs.find("outbound queue over the cap and not draining; closing the connection"),
+      ).toEqual([]);
+    },
+  );
+
+  it("is not kept open for a client that stops reading: it is closed within the stall window and two sweeps", async () => {
     const server = await launch();
     const f = await createDocument();
     await storeDocument(server, f.documentId, DOCUMENT_BYTES);
@@ -103,8 +143,12 @@ describe("a document as large as the document cap", () => {
     client.awareness.setLocalState(client.state());
     const closes = () =>
       server.logs.find("outbound queue over the cap and not draining; closing the connection");
-    await waitFor(() => closes().length > 0, "the server to close the stalled connection", 4000);
-    expect(Date.now() - began).toBeLessThan(4000);
+    await waitFor(
+      () => closes().length > 0,
+      "the server to close the stalled connection",
+      STALL_WINDOW_MS + 2000,
+    );
+    expect(Date.now() - began).toBeLessThan(STALL_WINDOW_MS + 2000);
     expect(closes()).toHaveLength(1);
     expect(server.logs.find("outbound queue over the cap; disconnecting")).toEqual([]);
   });

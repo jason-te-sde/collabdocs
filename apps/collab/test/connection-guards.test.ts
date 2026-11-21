@@ -241,7 +241,7 @@ describe("connections that belong to no document", () => {
     conn.send(Buffer.alloc(20_000_000));
     for (let i = 0; i < 20_000; i += 1) conn.send("0");
     expect(queuedPackets(conn)).toBeGreaterThan(DEFAULT_LIMITS.maxOutboundPackets);
-    await waitFor(() => open(server) === 0, "the sweep to close the connection", 4000);
+    await waitFor(() => open(server) === 0, "the sweep to close the connection", 7000);
     expect(
       server.logs.find("outbound queue over the cap and not draining; closing the connection"),
     ).toEqual([expect.objectContaining({ queuedPackets: expect.any(Number) })]);

@@ -302,7 +302,7 @@ export class DocumentEntry {
    * once: the cap plus the largest document, which is the most a reply can add. A client
    * that is taking a large reply is over the cap for as long as the download lasts and
    * must not be dropped by the next cursor move; a client that has stopped reading is
-   * closed by the sweep in `server.ts` at its second sweep over the cap, and by this
+   * closed by the sweep in `server.ts` once it has been over the cap for `STALL_WINDOW_MS`, and by this
    * check if its queue is past a full cap plus a full document.
    */
   private broadcastLimitBytes(): number {

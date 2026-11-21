@@ -86,46 +86,61 @@ export function queuedPackets(conn: unknown): number {
   return internals(conn).writeBuffer?.length ?? 0;
 }
 
-/** What the last sweep saw of a connection. */
+/** What the sweeps have seen of a connection. */
 interface SweepSample {
   bytes: number;
   packets: number;
   /** Bytes the kernel has not accepted yet, if the transport can say. */
   pending: number | undefined;
-  overBytes: boolean;
-  overPackets: boolean;
+  over: boolean;
+  /** When the connection last made visible progress, or went over a cap. */
+  lastProgressAt: number;
 }
 const lastSweep = new WeakMap<object, SweepSample>();
 
 /**
- * For the periodic sweep: whether a connection is over a cap and not draining. It is when,
- * at this sweep and at the one before, the same measure (bytes or packets) was over its
- * cap, and nothing was taken since: the bytes the kernel has not accepted (the write queue
- * of the TCP socket's handle) did not shrink and the queue has not shrunk. `bufferedAmount`
+ * How long a connection must be over a cap with no visible progress before it is closed.
+ * One sweep is too short: a client reading a large reply makes progress in steps (Linux
+ * reports a socket writable again only when a third of its send buffer is free, and a
+ * client on a slow or bursty link reads in bursts), and the steps can be more than one
+ * sweep apart. Three seconds is several sweeps and longer than the bursts of a client
+ * that is reading at all.
+ */
+export const STALL_WINDOW_MS = 3000;
+
+/**
+ * For the periodic sweep: whether a connection is over a cap and not draining. Progress is
+ * the bytes the kernel has not accepted (the write queue of the TCP socket's handle), the
+ * queue's bytes, or its packets getting smaller since the last sweep. `bufferedAmount`
  * alone cannot show a download in progress, because a WebSocket counts a message it is
  * still writing in full until its last byte is out; the handle's write queue shrinks as the
- * client reads. A client that is taking a
- * large reply is left alone however long that takes; one that has stopped reading is
- * closed at its second sweep over the cap. Call it once per sweep per connection: it
+ * client reads. A connection is stalled when it is over a cap and has made no progress for
+ * `STALL_WINDOW_MS`: a client that is taking a large reply is left alone however long that
+ * takes, and one that has stopped reading is closed after the window. The window does not
+ * widen the memory bound: a broadcast closes a connection past the cap plus a document at
+ * once, and a reply is not queued past the cap. Call it once per sweep per connection: it
  * remembers what it saw.
  */
-export function stalledOverCap(conn: unknown, maxBytes: number, maxPackets: number): boolean {
+export function stalledOverCap(
+  conn: unknown,
+  maxBytes: number,
+  maxPackets: number,
+  now: number = Date.now(),
+): boolean {
   const key = conn as object;
   const bytes = queuedBytes(conn);
   const packets = queuedPackets(conn);
   const pending = internals(conn).transport?.socket?._socket?._handle?.writeQueueSize;
   const before = lastSweep.get(key);
-  const overBytes = bytes > maxBytes;
-  const overPackets = packets > maxPackets;
-  lastSweep.set(key, { bytes, packets, pending, overBytes, overPackets });
-  if (!before) return false;
-  if (pending !== undefined && before.pending !== undefined && pending < before.pending) {
-    return false;
-  }
-  return (
-    (overBytes && before.overBytes && bytes >= before.bytes) ||
-    (overPackets && before.overPackets && packets >= before.packets)
-  );
+  const over = bytes > maxBytes || packets > maxPackets;
+  const shrank =
+    before !== undefined &&
+    (bytes < before.bytes ||
+      packets < before.packets ||
+      (pending !== undefined && before.pending !== undefined && pending < before.pending));
+  const lastProgressAt = shrank || !before?.over ? now : before.lastProgressAt;
+  lastSweep.set(key, { bytes, packets, pending, over, lastProgressAt });
+  return over && now - lastProgressAt >= STALL_WINDOW_MS;
 }
 
 /** `queuedBytes` for the connection of a Socket.IO socket. */

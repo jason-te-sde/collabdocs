@@ -45,9 +45,9 @@ export interface Limits {
   /**
    * The most bytes the server may hold queued for one connection, that the client has not
    * taken, when the client is not draining the queue. A periodic sweep over every
-   * connection closes one that is over it at two sweeps in a row without having shrunk, so
+   * connection closes one that has been over it for `STALL_WINDOW_MS` (3 s) without its queue shrinking, so
    * a client reading a large reply at any real rate is not closed however long it takes,
-   * and one that has stopped reading is closed within about a second. A sync reply is not
+   * and one that has stopped reading is closed after about 3 seconds. A sync reply is not
    * queued for a connection already over it, and a broadcast closes a connection at once
    * when it is over it by more than `maxDocumentBytes`, the most one reply can add.
    */
