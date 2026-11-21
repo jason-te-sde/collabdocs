@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "label": "allwrite-100-run1",
+  "protocol": "docs/benchmarks.md",
+  "startedAt": "2026-11-21T06:21:56.652Z",
+  "wallSeconds": 79.827,
+  "quietCheck": {
+    "skipped": false,
+    "quiet": true,
+    "waitedSeconds": 2.575,
+    "idlePercent": 94.54,
+    "busiestProcessPercent": 5.2
+  },
+  "commit": "2c1c3cb69e35e2977ae79f7b32e3f6531efd2f71",
+  "dirty": false,
+  "nodeVersion": "v25.6.1",
+  "machine": {
+    "cpu": "Apple M2",
+    "cores": 8,
+    "ramGiB": 16,
+    "platform": "Darwin 25.6.0 arm64"
+  },
+  "loadAverage": {
+    "m1": 2.201171875,
+    "m5": 2.16943359375,
+    "m15": 2.021484375
+  },
+  "services": {
+    "postgres": "17.10 (Homebrew)",
+    "redis": "8.10.3"
+  },
+  "parameters": {
+    "editors": 100,
+    "writers": 100,
+    "readers": 0,
+    "scenario": "all-write",
+    "writerShare": 1,
+    "editsPerSecondPerWriter": 3,
+    "readerCursorIntervalMs": 5000,
+    "warmupSeconds": 10,
+    "durationSeconds": 60,
+    "drainSeconds": 5,
+    "generatorProcesses": 3,
+    "editorsPerGeneratorProcess": 34,
+    "server": {
+      "command": "node --import tsx src/main.ts",
+      "nodeEnv": "production",
+      "redisAdapter": true,
+      "postgresPersistence": true,
+      "limits": "defaults",
+      "instances": 1
+    }
+  },
+  "traffic": {
+    "editsInWindow": 17968,
+    "editsPerSecond": 299.46666666666664,
+    "syncMessagesDeliveredPerSecond": 29648.1,
+    "awarenessMessagesDeliveredPerSecond": 29647.633333333335
+  },
+  "latencyMs": {
+    "count": 1778832,
+    "min": 0.44873046875,
+    "p50": 2.40869140625,
+    "p95": 8.00048828125,
+    "p99": 16.2109375,
+    "max": 61.85302734375,
+    "mean": 3.1969048067996653
+  },
+  "latencyHistogram": {
+    "<=1": 171076,
+    "<=2": 522547,
+    "<=5": 836960,
+    "<=10": 189577,
+    "<=20": 50899,
+    "<=50": 7732,
+    "<=100": 41,
+    "<=200": 0,
+    "<=500": 0,
+    "<=1000": 0,
+    ">1000": 0
+  },
+  "delivery": {
+    "expected": 1778832,
+    "observed": 1778832,
+    "missing": 0,
+    "duplicates": 0,
+    "unmatched": 0,
+    "negative": 0
+  },
+  "server": {
+    "rssMiB": {
+      "idleAfterStart": 97.390625,
+      "afterConnecting": 111.109375,
+      "windowMax": 263.46875,
+      "windowEnd": 263.46875
+    },
+    "cpuPercentOfOneCore": {
+      "windowMean": 53.16815358898177,
+      "windowPeakOneSecond": 64.87618721789985
+    },
+    "samples": 59
+  },
+  "clockSkewBetweenGeneratorsAndOrchestrator": [
+    {
+      "process": 0,
+      "offsetMs": 0.013916015625,
+      "uncertaintyMs": 0.0096435546875
+    },
+    {
+      "process": 1,
+      "offsetMs": 0.015869140625,
+      "uncertaintyMs": 0.01025390625
+    },
+    {
+      "process": 2,
+      "offsetMs": 0.01513671875,
+      "uncertaintyMs": 0.0096435546875
+    }
+  ],
+  "generator": [
+    {
+      "process": 0,
+      "eventLoopDelayMs": {
+        "p50": 0.3336249999993015,
+        "p99": 3.361333000000741,
+        "max": 15.914916000008816,
+        "mean": 0.5823772602814844,
+        "maxAtMs": 56254.54625000001,
+        "samples": 10942
+      },
+      "cpuPercentOfOneCore": 60.43312333333333
+    },
+    {
+      "process": 1,
+      "eventLoopDelayMs": {
+        "p50": 0.3193749999991269,
+        "p99": 3.180500000002212,
+        "max": 22.04429099999834,
+        "mean": 0.5716022135887358,
+        "maxAtMs": 31783.533333,
+        "samples": 10965
+      },
+      "cpuPercentOfOneCore": 60.561105000000005
+    },
+    {
+      "process": 2,
+      "eventLoopDelayMs": {
+        "p50": 0.2906670000011218,
+        "p99": 2.9034170000013546,
+        "max": 16.743249999999534,
+        "mean": 0.5415578227939664,
+        "maxAtMs": 44834.897625000005,
+        "samples": 11038
+      },
+      "cpuPercentOfOneCore": 59.505771666666675
+    }
+  ],
+  "integrity": {
+    "editorsWithTheCommonFinalDocument": 100,
+    "databaseHoldsTheFinalDocument": true,
+    "disconnects": 0,
+    "rejections": 0,
+    "refusedHandshakes": 0,
+    "serverWarningsAndErrors": 0
+  },
+  "verdict": {
+    "status": "valid",
+    "invalid": [],
+    "failed": []
+  }
+}
