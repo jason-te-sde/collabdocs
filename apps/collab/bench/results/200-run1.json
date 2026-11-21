@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "label": "200-run1",
+  "protocol": "docs/benchmarks.md",
+  "startedAt": "2026-11-21T05:47:31.705Z",
+  "wallSeconds": 79.653,
+  "quietCheck": {
+    "skipped": false,
+    "quiet": true,
+    "waitedSeconds": 2.562,
+    "idlePercent": 94.75,
+    "busiestProcessPercent": 4.4
+  },
+  "commit": "8d8cecd9520bb7e6d83d265bd849cac77b4c0dd8",
+  "dirty": false,
+  "nodeVersion": "v25.6.1",
+  "machine": {
+    "cpu": "Apple M2",
+    "cores": 8,
+    "ramGiB": 16,
+    "platform": "Darwin 25.6.0 arm64"
+  },
+  "loadAverage": {
+    "m1": 1.6474609375,
+    "m5": 2.04833984375,
+    "m15": 2.1748046875
+  },
+  "services": {
+    "postgres": "17.10 (Homebrew)",
+    "redis": "8.10.3"
+  },
+  "parameters": {
+    "editors": 200,
+    "writers": 40,
+    "readers": 160,
+    "writerShare": 0.2,
+    "editsPerSecondPerWriter": 3,
+    "readerCursorIntervalMs": 5000,
+    "warmupSeconds": 10,
+    "durationSeconds": 60,
+    "drainSeconds": 5,
+    "generatorProcesses": 5,
+    "editorsPerGeneratorProcess": 40,
+    "server": {
+      "command": "node --import tsx src/main.ts",
+      "nodeEnv": "production",
+      "redisAdapter": true,
+      "postgresPersistence": true,
+      "limits": "defaults",
+      "instances": 1
+    }
+  },
+  "traffic": {
+    "editsInWindow": 7196,
+    "editsPerSecond": 119.93333333333334,
+    "syncMessagesDeliveredPerSecond": 23864.616666666665,
+    "awarenessMessagesDeliveredPerSecond": 30244.05
+  },
+  "latencyMs": {
+    "count": 1432004,
+    "min": 0.814697265625,
+    "p50": 3.301025390625,
+    "p95": 10.330810546875,
+    "p99": 17.45263671875,
+    "max": 89.59375,
+    "mean": 4.319633787719049
+  },
+  "latencyHistogram": {
+    "<=1": 10548,
+    "<=2": 328748,
+    "<=5": 664990,
+    "<=10": 348970,
+    "<=20": 68697,
+    "<=50": 9548,
+    "<=100": 503,
+    "<=200": 0,
+    "<=500": 0,
+    "<=1000": 0,
+    ">1000": 0
+  },
+  "delivery": {
+    "expected": 1432004,
+    "observed": 1432004,
+    "missing": 0,
+    "duplicates": 0,
+    "unmatched": 0,
+    "negative": 0
+  },
+  "server": {
+    "rssMiB": {
+      "idleAfterStart": 102.78125,
+      "afterConnecting": 140.578125,
+      "windowMax": 218.78125,
+      "windowEnd": 218.78125
+    },
+    "cpuPercentOfOneCore": {
+      "windowMean": 48.4662222602217,
+      "windowPeakOneSecond": 56.95315547343996
+    },
+    "samples": 60
+  },
+  "generator": [
+    {
+      "process": 0,
+      "eventLoopDelayMs": {
+        "p50": 0.2264949999999999,
+        "p99": 1.873087,
+        "max": 18.674879,
+        "mean": 0.39736359730094506
+      },
+      "cpuPercentOfOneCore": 36.48148166666667
+    },
+    {
+      "process": 1,
+      "eventLoopDelayMs": {
+        "p50": 0.23059100000000043,
+        "p99": 1.8853749999999998,
+        "max": 41.465023,
+        "mean": 0.39948251066510654
+      },
+      "cpuPercentOfOneCore": 36.28319666666666
+    },
+    {
+      "process": 2,
+      "eventLoopDelayMs": {
+        "p50": 0.23878299999999975,
+        "p99": 1.8812790000000001,
+        "max": 36.746431,
+        "mean": 0.39673913206189315
+      },
+      "cpuPercentOfOneCore": 37.33737
+    },
+    {
+      "process": 3,
+      "eventLoopDelayMs": {
+        "p50": 0.19782299999999964,
+        "p99": 1.9058549999999999,
+        "max": 14.742719000000001,
+        "mean": 0.3918209702525388
+      },
+      "cpuPercentOfOneCore": 37.81888666666667
+    },
+    {
+      "process": 4,
+      "eventLoopDelayMs": {
+        "p50": 0.23878299999999975,
+        "p99": 1.8853749999999998,
+        "max": 14.021823000000001,
+        "mean": 0.40194594345398915
+      },
+      "cpuPercentOfOneCore": 35.766275
+    }
+  ],
+  "integrity": {
+    "editorsWithTheCommonFinalDocument": 200,
+    "databaseHoldsTheFinalDocument": true,
+    "disconnects": 0,
+    "rejections": 0,
+    "refusedHandshakes": 0,
+    "serverWarningsAndErrors": 0
+  },
+  "verdict": {
+    "status": "valid",
+    "invalid": [],
+    "failed": []
+  }
+}
