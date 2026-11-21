@@ -10,8 +10,8 @@
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { monitorEventLoopDelay } from "node:perf_hooks";
 import { LoadEditor, Rows, nowMs } from "./client";
+import { LagMeter, type Lag } from "./lag";
 
 export interface WorkerConfig {
   workerIndex: number;
@@ -36,7 +36,7 @@ export interface WorkerResult {
   connectErrors: string[];
   /** Per editor: a hash of its final text. */
   finals: Array<{ index: number; length: number; hash: string }>;
-  lag: { p50: number; p99: number; max: number; mean: number };
+  lag: Lag;
   cpuMs: { user: number; system: number };
   windowMs: number;
   /** Messages the editors received from the server inside the window. */
@@ -63,14 +63,8 @@ const editors = config.editors.map(
     }),
 );
 
-/**
- * Node records the whole interval between two timer ticks, so an idle loop reads as the
- * resolution. The resolution is subtracted; what is left still holds about a millisecond
- * of timer slop, so the figure slightly overstates the lag.
- */
-const RESOLUTION_MS = 5;
-const histogram = monitorEventLoopDelay({ resolution: RESOLUTION_MS });
-let lag = { p50: 0, p99: 0, max: 0, mean: 0 };
+const meter = new LagMeter(5);
+let lag: Lag = { p50: 0, p99: 0, max: 0, mean: 0, maxAtMs: 0, samples: 0 };
 let cpuStart = process.cpuUsage();
 let cpu = { user: 0, system: 0 };
 let windowMs = 0;
@@ -92,7 +86,11 @@ function at(time: number, action: () => void): void {
   setTimeout(action, Math.max(0, time - nowMs()));
 }
 
-process.on("message", (message: { type: string; from?: number; to?: number }) => {
+process.on("message", (message: { type: string; from?: number; to?: number; id?: number }) => {
+  if (message.type === "ping") {
+    process.send!({ type: "pong", id: message.id, t: nowMs() });
+    return;
+  }
   if (message.type === "go") {
     const from = message.from!;
     const to = message.to!;
@@ -102,20 +100,12 @@ process.on("message", (message: { type: string; from?: number; to?: number }) =>
       editor.start();
     }
     at(from, () => {
-      histogram.reset();
-      histogram.enable();
+      meter.start();
       cpuStart = process.cpuUsage();
       messagesAtStart = total();
     });
     at(to, () => {
-      histogram.disable();
-      const ms = (ns: number) => Math.max(0, ns / 1e6 - RESOLUTION_MS);
-      lag = {
-        p50: ms(histogram.percentile(50)),
-        p99: ms(histogram.percentile(99)),
-        max: ms(histogram.max),
-        mean: ms(histogram.mean),
-      };
+      lag = meter.stop();
       const used = process.cpuUsage(cpuStart);
       cpu = { user: used.user / 1000, system: used.system / 1000 };
       windowMs = to - from;

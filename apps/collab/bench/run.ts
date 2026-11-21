@@ -27,6 +27,7 @@ import * as Y from "yjs";
 import { nowMs } from "./client";
 import { joinLatencies } from "./join";
 import { processUsage, provenance, waitForQuiet } from "./machine";
+import { measureSkew } from "./skew";
 import { summarize } from "./stats";
 import { judgeRun } from "./validity";
 import type { WorkerConfig, WorkerResult } from "./worker";
@@ -310,6 +311,11 @@ async function main(): Promise<void> {
 
   await Promise.race([Promise.all(workers.map((w) => expectMessage(w, "ready"))), serverExited]);
   const connectedUsage = processUsage(serverPid);
+  // How far apart the clocks of the generator processes are, measured before the run.
+  const skews: Array<{ process: number; offsetMs: number; uncertaintyMs: number }> = [];
+  for (let w = 0; w < workers.length; w += 1) {
+    skews.push({ process: w, ...(await measureSkew(workers[w]!)) });
+  }
 
   const startAt = nowMs() + 500;
   const from = startAt + warmupSeconds * 1000;
@@ -435,6 +441,7 @@ async function main(): Promise<void> {
       editors,
       writers: writerCount,
       readers: editors - writerCount,
+      scenario: writerShare === 1 ? "all-write" : "one-in-five",
       writerShare,
       editsPerSecondPerWriter: ratePerWriter,
       readerCursorIntervalMs,
@@ -469,6 +476,7 @@ async function main(): Promise<void> {
       negative: joined.negative,
     },
     server: serverStats,
+    clockSkewBetweenGeneratorsAndOrchestrator: skews,
     generator: results.map((r) => ({
       process: r.workerIndex,
       eventLoopDelayMs: r.lag,
