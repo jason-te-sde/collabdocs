@@ -37,7 +37,7 @@ The screenshot is Ada's browser, one of three Playwright browsers in the same do
 
 ## Goals
 
-The project is built to deliver four things. Goals 1 and 2 are measured by the load test, and the numbers, with what they do and do not show, are in [Performance](#performance). Goals 3 and 4 have tests that run in CI.
+The project is built to deliver four things. Goals 1 and 2 are measured by the load test, and the numbers, with how many editors typed in each run and what they do and do not show, are in [Performance](#performance). Goals 3 and 4 have tests that run in CI.
 
 1. Yjs CRDT sync over Socket.IO with a latency under 100 ms. Defined as: with 50 editors on loopback, the p95 of the time from one client's write to every other client applying it.
 2. 50 or more people editing one document at once, with live cursors and presence (the Yjs awareness protocol).
@@ -103,32 +103,43 @@ The scores are taken from CI, not from a laptop, because they depend on the mach
 
 ## Performance
 
-Measured by the sync-latency load test in `apps/collab/bench`, under the protocol in [docs/benchmarks.md](docs/benchmarks.md), which was committed before the first measured run. Every number in this section is in a committed file in [`apps/collab/bench/results`](apps/collab/bench/results); `scripts/benchmarks/readme-numbers.mjs` runs in CI and fails if the table is not what those files produce or if another number here is in none of them.
+Measured by the sync-latency load test in `apps/collab/bench`, under the protocol in [docs/benchmarks.md](docs/benchmarks.md), which was committed before measuring began (the all-write scenario was added later, with its reason, in an addendum committed before it was run). Every number in this section is generated from the committed files in [`apps/collab/bench/results`](apps/collab/bench/results) by `scripts/benchmarks/readme-numbers.mjs`, which CI runs: the generated blocks below must equal what the files produce, and the hand-written text must contain no number at all.
 
-**The claim, as defined.** "Sync latency under 100 ms" means: with 50 editors on one document on local loopback, the 95th percentile of the time from a client applying and sending its own edit to another client having received and applied it, over every (edit, receiving editor) pair of a run, below 100 ms in each of at least three runs.
+<!-- performance-text:start -->
+
+**The claim, as defined.** "Sync latency under 100 ms" means: with 50 editors on one document on local loopback, the 95th percentile of the time from a client applying and sending its own edit to another client having received and applied it, over every (edit, receiving editor) pair of a run, is below 100 ms in each of at least 3 runs.
+
+**Setup.** One Apple M2 machine with 8 cores and 16 GB of RAM; the clients and the server on the loopback interface; Node v25.6.1, PostgreSQL 17.10 and Redis 8.10.3, all local. The server is the real collab server in production mode: 1 instance, the Redis adapter on, PostgreSQL persistence on (update log compacted into snapshots), and defaults limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. A typing editor makes 3 edits per second on average, one character per edit, and moves its cursor with every character; an editor that does not type moves its cursor about every 5 seconds. Each run has 10 seconds of warm-up, a window of 60 seconds that is measured, and 5 seconds for what is still in flight to arrive. The editors are headless (`yjs` and `socket.io-client`, speaking the real sync and awareness protocol).
+
+**Two scenarios.** In the _one-in-five_ scenario one editor in 5 types and the others only read: 50 editors, 10 of them typing; 100 editors, 20 of them typing; 200 editors, 40 of them typing; generator processes: 50 editors on 2, 100 editors on 3, 200 editors on 5.
+
+In every one of the 9 counted runs nobody was disconnected, refused or sent a `rejected` notice, the server logged no warning, every delivery arrived exactly once, and every editor and the database ended with the same document; the default limits did not throttle these loads.
+
+**Goal 2 (50 or more editors on one document at once, with live cursors and presence), as measured:** not supported with every editor typing by these runs. By run: 50 editors with 10 typing (one-in-five): 3 of 3 counted runs clean; 100 editors with 20 typing (one-in-five): 3 of 3 counted runs clean; 200 editors with 40 typing (one-in-five): 3 of 3 counted runs clean.
+
+Median over the counted runs of each size, p95 latency and mean server CPU as a percentage of one core: one-in-five: 50 editors 5.9 ms and 12%, 100 editors 6.2 ms and 23%, 200 editors 10.3 ms and 49%.
+<!-- performance-text:end -->
 
 <!-- performance-table:start -->
 
-| Results file    | Editors          | p50 (ms) | p95 (ms) | p99 (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms) | Status |
-| --------------- | ---------------- | -------- | -------- | -------- | ------------------------- | ------------------------------ | ------------------------------------- | ------ |
-| `50-run1.json`  | 50 (10 writing)  | 1.9      | 5.2      | 7.5      | 147                       | 10                             | 2.0                                   | valid  |
-| `50-run2.json`  | 50 (10 writing)  | 2.7      | 6.1      | 8.2      | 146                       | 15                             | 2.0                                   | valid  |
-| `50-run3.json`  | 50 (10 writing)  | 2.3      | 5.9      | 7.8      | 193                       | 12                             | 1.9                                   | valid  |
-| `100-run1.json` | 100 (20 writing) | 2.3      | 6.2      | 9.7      | 202                       | 23                             | 2.0                                   | valid  |
-| `100-run2.json` | 100 (20 writing) | 2.4      | 6.3      | 9.0      | 203                       | 24                             | 2.0                                   | valid  |
-| `100-run3.json` | 100 (20 writing) | 1.9      | 5.0      | 7.6      | 201                       | 18                             | 1.9                                   | valid  |
-| `200-run1.json` | 200 (40 writing) | 3.3      | 10.3     | 17.5     | 219                       | 48                             | 1.9                                   | valid  |
-| `200-run2.json` | 200 (40 writing) | 3.4      | 10.2     | 15.9     | 225                       | 49                             | 1.9                                   | valid  |
-| `200-run3.json` | 200 (40 writing) | 3.9      | 11.4     | 17.8     | 222                       | 52                             | 1.9                                   | valid  |
+| Results file    | Scenario    | Editors         | p50 (ms) | p95 (ms) | p99 (ms) | Server RSS, highest (MiB) | Server CPU, mean (% of a core) | Generator lag p99, worst process (ms, includes about a millisecond of timer slop) | Status |
+| --------------- | ----------- | --------------- | -------- | -------- | -------- | ------------------------- | ------------------------------ | --------------------------------------------------------------------------------- | ------ |
+| `50-run1.json`  | one-in-five | 50 (10 typing)  | 1.9      | 5.2      | 7.5      | 147                       | 10                             | 2.0                                                                               | valid  |
+| `50-run2.json`  | one-in-five | 50 (10 typing)  | 2.7      | 6.1      | 8.2      | 146                       | 15                             | 2.0                                                                               | valid  |
+| `50-run3.json`  | one-in-five | 50 (10 typing)  | 2.3      | 5.9      | 7.8      | 193                       | 12                             | 1.9                                                                               | valid  |
+| `100-run1.json` | one-in-five | 100 (20 typing) | 2.3      | 6.2      | 9.7      | 202                       | 23                             | 2.0                                                                               | valid  |
+| `100-run2.json` | one-in-five | 100 (20 typing) | 2.4      | 6.3      | 9.0      | 203                       | 24                             | 2.0                                                                               | valid  |
+| `100-run3.json` | one-in-five | 100 (20 typing) | 1.9      | 5.0      | 7.6      | 201                       | 18                             | 1.9                                                                               | valid  |
+| `200-run1.json` | one-in-five | 200 (40 typing) | 3.3      | 10.3     | 17.5     | 219                       | 48                             | 1.9                                                                               | valid  |
+| `200-run2.json` | one-in-five | 200 (40 typing) | 3.4      | 10.2     | 15.9     | 225                       | 49                             | 1.9                                                                               | valid  |
+| `200-run3.json` | one-in-five | 200 (40 typing) | 3.9      | 11.4     | 17.8     | 222                       | 52                             | 1.9                                                                               | valid  |
 
 **The claim holds as defined:** the p95 of every one of the 3 valid runs at 50 editors is below 100 ms (highest 6.1 ms).
 <!-- performance-table:end -->
 
-**Setup.** One Apple M2 laptop with 8 cores and 16 GB of RAM; the clients and the server on the loopback interface; Node v25.6.1, PostgreSQL 17.10 and Redis 8.10.3, all local. The server is the real collab server in production mode: one instance, the Redis adapter on, PostgreSQL persistence on (update log compacted into snapshots), and the default limits, none raised. Every editor is its own user with one socket on the same document, with cursors and presence on. Every fifth editor types, 3 edits per second each (one character per edit, moving its cursor with every character); the others read and move their cursor now and then. Each run has 10 seconds of warm-up, a window of 60 seconds that is measured, and 5 seconds for what is still in flight to arrive. The editors are headless (`yjs` and `socket.io-client`, speaking the real sync and awareness protocol), spread over 2, 3 and 5 processes for 50, 100 and 200 editors; each process records its own event-loop delay, and a run in which the generator lagged would have been invalid. Three runs per size, made in rounds.
+**What this does and does not show.** The latency is to the receiving `Y.Doc`, so it does not include rendering in a browser. An editor count here is the number of connected editors; the text above says how many of them typed in each scenario, and the sentence about editing at once, with cursors and presence, rests on the scenario in which all of them did. The load test edits a `Y.Text`; the server relays Yjs updates without looking at what they contain, and the property test also covers the paragraph structure the editor produces. The generator lag column is the lag of a timer in the load generator, which cannot be below about a millisecond even when nothing is wrong; it is there to show that the generator was not the bottleneck, not as a measurement of that much lag.
 
-**What the runs show.** In all of them nobody was disconnected, refused or sent a `rejected` notice, the server logged no warning, every delivery arrived exactly once, every editor and the database ended with the same document, so the default limits did not throttle this load. The latency is to the receiving `Y.Doc`, so it does not include rendering in a browser. Latency and server CPU grow with the number of editors, because every edit and every cursor move is sent to everyone else; the server used less than one core at every size, and the memory it needed is in the table.
-
-**Not measured.** Browsers (rendering, TipTap, ProseMirror); any real network (WAN, TLS, a proxy or load balancer, Wi-Fi); more than one server instance, and more than one document at a time; a large or old document (the log is short and the snapshot small); read-only viewers; the server's event-loop lag and the CPU and memory of Redis and PostgreSQL (only the server process was sampled); editors that reconnect during a run; runs longer than a minute or two; sizes above 200 editors.
+**Not measured.** Browsers (rendering, TipTap, ProseMirror); any real network (WAN, TLS, a proxy or load balancer, Wi-Fi); several server instances, and several documents at a time; a large or old document (the log is short and the snapshot small); read-only viewers; the server's event-loop lag and the CPU and memory of Redis and PostgreSQL (only the server process was sampled); editors that reconnect during a run; long soak runs; sizes above the largest in the table.
 
 To measure again, see [Reproducing](docs/benchmarks.md#reproducing).
 
