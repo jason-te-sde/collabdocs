@@ -28,7 +28,7 @@ The editor must show other people's cursors and edits live, keep working when th
 
 ## Accessibility
 
-Every control has a visible label or an accessible name; the dialogs are Radix `Dialog` (focus trap, Escape, focus return, title and description); the connection indicator is a polite live region; the editor is a labelled multi-line textbox; the page has a skip link, landmarks and one `h1`; focus rings are visible; text and controls use colours that meet WCAG AA contrast on their backgrounds, and cursor labels use colours dark enough for white text. J-T5 measures this with Lighthouse.
+Every control has a visible label or an accessible name; the dialogs are Radix `Dialog` (focus trap, Escape, focus return, title and description); the connection indicator is a polite live region; the editor is a labelled multi-line textbox; the page has a skip link, landmarks and one `h1`; focus rings are visible; text and controls use colours that meet WCAG AA contrast on their backgrounds, and cursor labels use colours dark enough for white text. The Lighthouse job in CI measures this (see the README).
 
 ## Consequences
 

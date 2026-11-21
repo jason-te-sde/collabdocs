@@ -20,7 +20,7 @@ CollabDocs has a web app, a collaboration server and rules that both must apply 
 - The web app and the collab server deploy separately and can scale separately.
 - A rule changed in `shared` changes both sides in one commit, and one test suite covers both.
 - A bundle step for `shared` will be needed if the collab server is deployed as built JavaScript.
-- Socket.IO is heavier than a bare WebSocket and adds its own framing around Yjs messages. We accept that for the Redis adapter and the reconnection logic, and J-T4 measures what it costs.
+- Socket.IO is heavier than a bare WebSocket and adds its own framing around Yjs messages. We accept that for the Redis adapter and the reconnection logic, and the load test (`apps/collab/bench`) measures what it costs.
 - Both apps need `COLLAB_TOKEN_SECRET`. A leaked secret lets anyone mint tokens for any document, which is why the secret is separate from `AUTH_SECRET` and why the token's life is short.
 
 ## Alternatives rejected

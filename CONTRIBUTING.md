@@ -2,12 +2,12 @@
 
 ## Set up
 
-Follow [Local setup](README.md#local-setup). Then `npm run preflight` must pass on a clean checkout.
+Follow [Run it locally](README.md#run-it-locally). Then `npm run preflight` must pass on a clean checkout.
 
 ## Rules the build enforces
 
 - **English only.** Code, comments, documentation, commit messages, test names and log lines. CI fails on any CJK character in a tracked file, a file name or a commit message, in any Unicode plane.
-- **No attribution lines.** Commit messages, pull request text and files are the author's own work: no tool credit, no co-author trailer. CI fails on the patterns in `scripts/attribution-patterns.txt`. It scans the whole history, so one bad commit fails every later push until it is rewritten.
+- **No attribution lines.** Commit messages, pull request text and files are the author's own work: no tool credit, no co-author trailer. CI fails on the patterns in `scripts/attribution-patterns.txt` (any co-author trailer, any line that credits a generator tool, a vendor's no-reply address, and a few more). It scans the whole history, so one bad commit fails every later push until it is rewritten.
 - **TypeScript is strict,** ESLint has no warnings and Prettier has nothing to change (`npm run format` fixes formatting).
 - **Every route checks the session and then `can(role, action)`.** A non-member gets 404, never 403. A new route needs a test for each role: owner, editor, viewer, a non-member and no session.
 - **The database holds the invariants.** If a rule must always be true (one owner, one membership per user), put it in a constraint or a trigger in the migration and add a test in `apps/web/test/db-invariants.test.ts`.

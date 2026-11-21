@@ -28,15 +28,16 @@ Every document has several people on it with different rights. The rights must h
 
 **Collaboration tokens.** `POST /api/documents/:id/collab-token` requires `read`, and returns an HS256 JWT with:
 
-| Claim        | Meaning                                            |
-| ------------ | -------------------------------------------------- |
-| `iss`, `aud` | `collabdocs-web`, `collabdocs-collab`              |
-| `sub`        | the user id                                        |
-| `doc`        | the document id                                    |
-| `role`       | the role held when the token was issued            |
-| `iat`, `exp` | issue and expiry; 5 minutes by default, 15 at most |
+| Claim        | Meaning                                               |
+| ------------ | ----------------------------------------------------- |
+| `iss`, `aud` | `collabdocs-web`, `collabdocs-collab`                 |
+| `sub`        | the user id                                           |
+| `doc`        | the document id                                       |
+| `role`       | the role held when the token was issued               |
+| `name`       | the display name for presence (at most 80 characters) |
+| `iat`, `exp` | issue and expiry; 5 minutes by default, 15 at most    |
 
-The secret is `COLLAB_TOKEN_SECRET`: at least 32 bytes, and different from `AUTH_SECRET`, so that leaking one does not leak the other. `verifyCollabToken` accepts only HS256 and requires issuer, audience, expiry, a known role and the document id the connection asks for; it throws a `CollabTokenError` with a reason (`expired`, `bad-signature`, `wrong-document`, `bad-claims`, `malformed`).
+The secret is `COLLAB_TOKEN_SECRET`: at least 32 bytes, and different from `AUTH_SECRET`, so that leaking one does not leak the other. `verifyCollabToken` accepts only HS256 and requires issuer, audience, expiry, a known role, a display name and the document id the connection asks for; it throws a `CollabTokenError` with a reason (`expired`, `bad-signature`, `wrong-document`, `bad-claims`, `malformed`).
 
 ## Consequences
 
