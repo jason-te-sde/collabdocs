@@ -111,14 +111,38 @@ export REDIS_URL=redis://localhost:6397
 
 cd apps/collab
 node --import tsx bench/run.ts --editors 50 --label 50-run1    # writes bench/results/50-run1.json
+node --import tsx bench/run.ts --editors 50 --writer-share 1 --label allwrite-50-run1   # every editor types
 ```
 
 `bench/run.ts` takes `--editors` and `--label`; every protocol value above is its default. It creates the document and the users, starts the server, runs, writes the file and removes what it created. `--skip-quiet-check` exists for trying the harness out; a result written with it is always marked invalid.
 
 ## Convergence test
 
-`apps/collab/test/convergence.test.ts` is a fast-check property test against a real collab server. Three clients make random inserts, deletes and formatting changes (bold, on and off) on one `Y.Text`, hold their updates back and release them late, in random order and sometimes twice, pause for random times, and go offline and come back through a new handshake. At the end they must all hold the same Yjs state as the database, the same text and the same formatting, and every token that was typed and not deleted must be in the text exactly once. It runs with `npm test` in about five seconds. A failure prints the seed and the run count; `FC_SEED=<seed> FC_RUNS=<runs> npx vitest run test/convergence.test.ts` repeats the same operations (the timing is real, so a failure that depends on timing may need a few tries).
+`apps/collab/test/convergence.test.ts` is a fast-check property test against a real collab server. Three clients make random inserts, deletes and formatting changes (bold, on and off) on one `Y.Text` and insert and delete paragraphs in a `Y.XmlFragment`, hold their updates back and release them late, in random order and sometimes twice, apply what the server relays to them late and in random order, pause for random times, and go offline and come back through a new handshake. At the end they must all hold the same Yjs state as the database, the same text and the same formatting, and every token that was typed and not deleted must be in the text exactly once. It runs with `npm test` in about five seconds. A failure prints the seed and the run count; `FC_SEED=<seed> FC_RUNS=<runs> npx vitest run test/convergence.test.ts` repeats the same operations (the timing is real, so a failure that depends on timing may need a few tries).
 
 ## Changes to the protocol
 
-None yet.
+The protocol above is unchanged for the nine runs it was written for (`50-run1` to `200-run3`, made from commit `8d8cecd`), and those results stay as they are. After they were published, an independent review found two gaps, and the measurements below were added. Each entry says what was added, why, and what it applies to. Nothing here was chosen after seeing the numbers of the runs it applies to.
+
+### Addendum 1: a scenario in which every editor writes
+
+**Why.** In the nine runs only one editor in five types; at 50 editors, 10 type and 40 only read and move their cursor now and then. The second goal ("50 or more people editing one document at once, with live cursors and presence") was therefore only covered for 50 connected editors of whom 10 typed. This scenario measures it with everyone typing. It was added after the first results, prompted by that review, and committed before its first run.
+
+**What.** The same protocol with one difference: every editor is a writer (`--writer-share 1`). Per editor the rate is the same, 3 edits per second on average with the same jitter, and the cursor behaves as it does for the writers above (moves with every character). Sizes: 50 and 100 editors, 3 runs each, in rounds (50, 100, 50, 100, 50, 100), fresh server, document and users per run, default limits, same machine, same quiet-machine rule, same generator rule (at most 40 editors per process: 2 and 3 processes). The total edit rate is 150 and 300 edits per second, each delivered to 49 and 99 other editors. Results files are named `allwrite-<size>-run<k>.json` and carry `parameters.scenario: "all-write"`. Before this addendum was committed, the changed code (writer share, lag meter, clock skew) was exercised with one unmeasured 20-editor all-write smoke run of 8 seconds, whose output was thrown away.
+
+**Validity.** The rules of [An invalid run, and a failed one](#an-invalid-run-and-a-failed-one) apply unchanged, including the repeat with one more generator process when the generator lags. If the default limits throttle or disconnect any editor, that is a failed run and is the result: no limit is raised and the run is not repeated to get a clean one.
+
+**What it supports.** The goal-2 verdict rests on these runs. The latency claim (p95 at 50 editors) stays defined on the one-in-five runs, as written; the all-write runs are reported next to them and do not enter the claim.
+
+### Addendum 2: clock skew between processes
+
+The processes use `performance.timeOrigin + performance.now()`, and each takes its time origin at its own start, so a small constant offset between processes is possible. Before every run starting with the all-write runs, the orchestrator measures the offset of each generator process's clock from its own (200 ping-pong exchanges per process; the exchange with the shortest round trip is used, as NTP does, and half its round trip is the stated uncertainty) and records both in the results file (`clockSkewBetweenGeneratorsAndOrchestrator`). The skew is not subtracted. If it is not small against the p50 latency, the results say so. The nine earlier files carry no such measurement.
+
+### Addendum 3: the event-loop lag meter
+
+The nine earlier files measure the generator's event-loop delay with Node's `monitorEventLoopDelay`, and their `max` values (4 to 69 ms) were reported but not understood; the protocol's rule uses p99, which was followed. An experiment (an idle process, histogram enabled after three seconds) shows no start-up spike, so the first interval after `enable()` is not the cause; the large values are real stalls of the generator process (garbage collection, scheduling) that the p99 does not show. From the all-write runs on, the lag is measured with a timer of our own (`bench/lag.ts`, 5 ms interval, lateness of each tick; it has unit tests including a deliberate 50 ms block) which also records when in the window the largest delay happened (`maxAtMs`). Both p99 and max are recorded; the validity rule stays p99 against the smaller of 10 ms and the run's p95. An idle loop reads about a millisecond on this meter (timer slop), which is not lag.
+
+### Notes that do not change any measurement
+
+- The load test edits a `Y.Text`, as in the nine runs, so that its numbers are comparable. The collab server relays Yjs updates without interpreting them, so the type of the shared structure does not change what it does. The editor's own structure is a `Y.XmlFragment` of paragraphs; the convergence test covers it.
+- The convergence test now also holds, shuffles and delays what the server relays to each client (not only what clients send), and has an operation family on paragraphs in a `Y.XmlFragment`. A mutation that makes the relay drop an update to some clients fails it; a mutation that only delays or reorders relayed updates does not, because Yjs applies updates in any order.
