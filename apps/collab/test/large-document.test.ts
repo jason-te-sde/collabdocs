@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TestClient, cleanup, closeDb, createDocument, launch, resetDb, waitFor } from "./support";
+import { engineConnections } from "../src/outbound";
 
 beforeEach(resetDb);
 afterEach(cleanup);
@@ -20,6 +21,7 @@ async function storeDocument(server: Launched, documentId: string, size: number)
 interface PausableSocket {
   pause(): void;
   read(): unknown;
+  bytesRead: number;
 }
 
 /** The client's TCP socket, from the WebSocket transport of its Socket.IO connection. */
@@ -49,11 +51,32 @@ describe("a document as large as the document cap", () => {
       const presence = setInterval(() => {
         if (client.connected) client.awareness.setLocalState(client.state({ move: (moves += 1) }));
       }, 100);
+      // What the server sees of this connection, for the failure message.
+      const seen: string[] = [];
+      const watch = setInterval(() => {
+        const conn = engineConnections(server.io.engine)[0] as {
+          transport?: {
+            socket?: {
+              bufferedAmount?: number;
+              _socket?: { _handle?: { writeQueueSize?: number } };
+            };
+          };
+        };
+        const ws = conn?.transport?.socket;
+        seen.push(`${ws?.bufferedAmount}/${ws?._socket?._handle?.writeQueueSize}/${tcp.bytesRead}`);
+      }, 500);
       try {
-        await waitFor(() => client.synced, "the whole document to arrive", 90_000);
+        await waitFor(() => client.synced, "the whole document to arrive", 45_000);
+      } catch (error) {
+        throw new Error(
+          `${(error as Error).message}; connected ${client.connected}, disconnects ${client.disconnects}, ` +
+            `buffered/pending/read per 500 ms: ${seen.join(" ")}; ` +
+            JSON.stringify(server.logs.records.filter((r) => r.level !== "info")),
+        );
       } finally {
         clearInterval(reader);
         clearInterval(presence);
+        clearInterval(watch);
       }
       expect(client.text.length).toBe(DOCUMENT_BYTES);
       expect(client.connected).toBe(true);
