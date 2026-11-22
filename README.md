@@ -18,8 +18,6 @@ Version 0.1.0 is the first release ([CHANGELOG](CHANGELOG.md)). It contains:
 - the sync-latency load test, with its protocol written down before the first run and its results committed ([Performance](#performance));
 - CI, including a Lighthouse gate (performance and accessibility of at least 0.92) and a check that every number in the Performance section is in a committed results file.
 
-What it leaves out, on purpose, is listed under "Known limits" in [SECURITY.md](SECURITY.md) (no password reset, no rate limit on the document routes; that ownership cannot be transferred is under "What you may do") and under "Not measured" in [Performance](#performance).
-
 ## The editor
 
 ![Ada's browser, with Grace's selection and Linus's cursor shown live, each with a name, and the presence list naming all three](docs/images/editor-two-cursors.png)
